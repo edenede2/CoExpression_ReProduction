@@ -1,0 +1,22 @@
+# Data directories
+data/
+old_outputs/
+filtered_samples/
+
+# Large data files
+*.gct
+*.tsv
+*.csv
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Virtual environment
+venv/
+env/
+.env
