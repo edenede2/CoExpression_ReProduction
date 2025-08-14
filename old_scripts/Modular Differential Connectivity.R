@@ -140,6 +140,43 @@ ks.pvaluesTop      = rep(1, no.modules)
 heatmaps.list      = as.list(rep(NA, no.modules))
 modsizes           = rep(NA, no.modules)
 
+# ---- NEW: compute true MDC per module (yfold) and build heatmap tiles ----
+lower_mean <- function(M) {
+  if (is.null(M) || any(dim(M) == 0)) return(NA_real_)
+  diag(M) <- 0
+  m <- abs(M)
+  mean(m[lower.tri(m)], na.rm = TRUE)
+}
+
+for (x in seq_len(no.modules)) {
+  idx <- which(modulescolorB == modulenames[x])
+  modsizes[x] <- length(idx)
+  if (length(idx) < 2) {
+    meanPermodule[x, ] <- c(NA_real_, NA_real_)
+    next
+  }
+  # A = old, B = young (keep the order consistent with shortnames)
+  A <- datExpr [idx, idx, drop = FALSE]
+  B <- datExpr2[idx, idx, drop = FALSE]
+  meanPermodule[x, 2] <- lower_mean(A)  # old
+  meanPermodule[x, 1] <- lower_mean(B)  # young
+
+  # heatmap tile: upper=young (B), lower=old (A)
+  AU <- abs(B); diag(AU) <- 0
+  AL <- abs(A); diag(AL) <- 0
+  ord <- order(rowSums(AU, na.rm = TRUE), decreasing = TRUE)
+  CB <- AU[ord, ord, drop = FALSE]
+  CA <- AL[ord, ord, drop = FALSE]
+  U <- CB; L <- CA
+  U[lower.tri(U, diag = TRUE)] <- NA
+  L[upper.tri(L, diag = TRUE)] <- NA
+  M <- U; M[is.na(M)] <- L[is.na(M)]
+  heatmaps.list[[x]] <- M
+}
+
+yfold <- meanPermodule[, 1] / meanPermodule[, 2]
+
+USE_SAMPLE_PERMS <- FALSE
 
 
 #############################################################################
@@ -186,32 +223,51 @@ for( y in c(1:no.perms) ) {
   GlobalyRandomMDC = cbind(GlobalyRandomMDC, GRmeanPermodule[,1]/GRmeanPermodule[,2])
 }
 
+# After computing GlobalyRandomMDC and GR_FDR:
 GRMDC_mean = apply(GlobalyRandomMDC, 1, mean)
-GRMDC_sd = apply(GlobalyRandomMDC, 1, sd)
-GR_Dat = cbind(yfold, GRMDC_mean, GRMDC_sd)
-GR_FDR_N = apply(GR_Dat, 1, MDC_FDR_by_normal_distr)
+GRMDC_sd   = apply(GlobalyRandomMDC, 1, sd)
+GR_Dat     = cbind(yfold, GRMDC_mean, GRMDC_sd)
+GR_FDR_N   = apply(GR_Dat, 1, MDC_FDR_by_normal_distr)
+GR_FDR     = apply(cbind(yfold, GlobalyRandomMDC), 1, MDC_FDR)
 
-GR_FDR = apply(cbind(yfold, GlobalyRandomMDC), 1, MDC_FDR)
 
-xfinal = cbind(modulenames, meanFoldChange, GlobalyRandomMDC)
+# Save only gene-permutation randoms if sample perms are skipped
+if (!USE_SAMPLE_PERMS) {
+  xfinal <- cbind(module = modulenames, GlobalyRandomMDC)
+  colnames(xfinal) <- c("module", sprintf("MDC_random_genes_%d", seq_len(ncol(GlobalyRandomMDC))))
+  write.table(xfinal, flog, sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
 
-colnames(xfinal) <- c("module", paste("MDC_random_genes_", c(1:no.perms), sep="") )
+  mdcFDR <- rep(NA_real_, length(yfold))
+  comFDR <- GR_FDR
+}
 
-write.table(xfinal, flog, sep="\t",quote=FALSE, col.names=T, row.names=FALSE)
+
+final = cbind(modulenames, round(yfold, 2),
+              signif(comFDR, 4),
+              signif(if (exists("mdcFDR")) mdcFDR else NA_real_, 4),
+              signif(GR_FDR, 4))
+colnames(final) = c("module", "MDC", "FDR", "FDR_random_samples", "FDR_random_genes")
+
+
+# xfinal = cbind(modulenames, meanFoldChange, GlobalyRandomMDC)
+
+# colnames(xfinal) <- c("module", paste("MDC_random_genes_", c(1:no.perms), sep="") )
+
+# write.table(xfinal, flog, sep="\t",quote=FALSE, col.names=T, row.names=FALSE)
 
 #--------------- compute FDR --------------------
 #
-rmean = apply(meanFoldChange, 1, mean)
-rsd   = apply(meanFoldChange, 1, sd)
-mdcDat = cbind(yfold, rmean, rsd)
-mdcFDR_N = apply(mdcDat, 1, MDC_FDR_by_normal_distr) # FDR by distribution
+# rmean = apply(meanFoldChange, 1, mean)
+# rsd   = apply(meanFoldChange, 1, sd)
+# mdcDat = cbind(yfold, rmean, rsd)
+# mdcFDR_N = apply(mdcDat, 1, MDC_FDR_by_normal_distr) # FDR by distribution
 
-mdcFDR = apply(cbind(yfold, meanFoldChange), 1, MDC_FDR)
+# mdcFDR = apply(cbind(yfold, meanFoldChange), 1, MDC_FDR)
 
-comFDR = apply(cbind(GR_FDR, mdcFDR), 1, max)
+# comFDR = apply(cbind(GR_FDR, mdcFDR), 1, max)
 
-final = cbind(modulenames, round(yfold,2),  signif(comFDR,4), signif(mdcFDR,4), signif(GR_FDR,4))
-colnames(final) = c("module", "MDC",  "FDR", "FDR_random_samples", "FDR_random_genes")
+# final = cbind(modulenames, round(yfold,2),  signif(comFDR,4), signif(mdcFDR,4), signif(GR_FDR,4))
+# colnames(final) = c("module", "MDC",  "FDR", "FDR_random_samples", "FDR_random_genes")
 final
 
 write.table(final, flog2, sep="\t",quote=FALSE, col.names=T, row.names=FALSE)

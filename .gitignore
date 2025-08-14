@@ -7,6 +7,8 @@ filtered_samples/
 *.gct
 *.tsv
 *.csv
+*.xls
+*.xlsx
 *.txt
 
 # R scripts
