@@ -39,7 +39,7 @@ class NetworkAnalysis:
         self.analysis_type = analysis_type
         
         if analysis_type == 'inter_tissue':
-            from inter_tissue_network_analysis import InterTissueNetworkAnalysis
+            from new_script.inter_tissue_network_analysis import InterTissueNetworkAnalysis
             self.inter_tissue_analyzer = InterTissueNetworkAnalysis()
             print("Initialized inter-tissue network analysis")
         else:
@@ -47,20 +47,131 @@ class NetworkAnalysis:
     
     def load_tissue_data_for_inter_tissue_analysis(self,
                                                   tissue_expression_data: Dict[str, pd.DataFrame],
-                                                  tissue_sample_mapping: Dict[str, List[str]]) -> None:
+                                                  tissue_sample_mapping: Dict[str, List[str]] = None) -> None:
         """
         Load tissue data for inter-tissue analysis.
         
         Args:
             tissue_expression_data: Dict mapping tissue names to expression matrices
-            tissue_sample_mapping: Dict mapping tissue names to sample IDs
+            tissue_sample_mapping: Dict mapping tissue names to sample IDs (optional, will be inferred)
         """
         if self.analysis_type != 'inter_tissue':
             raise ValueError("Must set analysis_type to 'inter_tissue' first")
         
-        self.inter_tissue_analyzer.load_tissue_data(
-            tissue_expression_data, tissue_sample_mapping
+        # Process tissue data to create concatenated format and extract sample mapping
+        processed_data = self._process_tissue_data_dict(tissue_expression_data)
+        
+        self.inter_tissue_analyzer.load_tissue_data_from_concatenated(
+            processed_data['concatenated_df'],
+            processed_data['tissue_sample_mapping']
         )
+    
+    def _process_tissue_data_dict(self, tissue_expression_data: Dict[str, pd.DataFrame]) -> Dict:
+        """
+        Process tissue data dictionary to create concatenated format.
+        
+        Args:
+            tissue_expression_data: Dict mapping tissue names to expression matrices (genes x samples)
+            
+        Returns:
+            Dict with concatenated_df and tissue_sample_mapping
+        """
+        print("Processing tissue data dictionary for inter-tissue analysis...")
+        
+        # Step 1: Find common genes across all tissues
+        tissue_gene_sets = {}
+        for tissue, tissue_data in tissue_expression_data.items():
+            # Remove tissue prefix to get just the gene IDs
+            genes_without_prefix = set([gene.split('_', 1)[1] for gene in tissue_data.index])
+            tissue_gene_sets[tissue] = genes_without_prefix
+            print(f"{tissue}: {len(genes_without_prefix)} genes")
+        
+        # Find intersection of all tissue gene sets
+        common_genes = set.intersection(*tissue_gene_sets.values())
+        common_genes = list(common_genes)
+        print(f"Common genes across all tissues: {len(common_genes)}")
+        
+        # Step 2: Create tissue-specific data with common genes only
+        tissue_processed_data = {}
+        tissue_sample_mapping = {}
+        
+        for tissue in tissue_expression_data.keys():
+            tissue_data = tissue_expression_data[tissue]
+            
+            # Get genes with tissue prefix that correspond to common genes
+            common_tissue_genes = [f"{tissue}_{gene}" for gene in common_genes if f"{tissue}_{gene}" in tissue_data.index]
+            
+            # Get the subset of data with common genes
+            tissue_subset = tissue_data.loc[common_tissue_genes]
+            tissue_processed_data[tissue] = tissue_subset
+            
+            # Extract sample names for this tissue
+            tissue_sample_mapping[tissue] = list(tissue_subset.columns)
+            
+            print(f"{tissue}: {tissue_subset.shape} (genes × samples)")
+        
+        # Step 3: Concatenate all tissue data
+        all_processed_data = pd.concat(tissue_processed_data.values(), axis=0)
+        all_processed_data['tissue'] = all_processed_data.index.str.split('_').str[0]
+        all_processed_data['gene'] = all_processed_data.index.str.split('_').str[1]
+        
+        # Reorder columns: tissue, gene, then sample columns
+        expression_columns = all_processed_data.columns[:-2]  # All columns except tissue and gene
+        all_processed_data = pd.concat([
+            all_processed_data["tissue"], 
+            all_processed_data["gene"], 
+            all_processed_data[expression_columns]
+        ], axis=1)
+        
+        # Step 4: Drop rows with all NaN in expression columns
+        all_processed_data_clean = all_processed_data.dropna(how='all', subset=expression_columns)
+        
+        print(f"Final concatenated data shape: {all_processed_data_clean.shape}")
+        print(f"Columns: {list(all_processed_data_clean.columns[:5])}...")  # Show first 5 columns
+        
+        return {
+            'concatenated_df': all_processed_data_clean,
+            'tissue_sample_mapping': tissue_sample_mapping,
+            'common_genes': common_genes
+        }
+    
+    def construct_inter_tissue_network_from_dict(self,
+                                               tissue_expression_data: Dict[str, pd.DataFrame],
+                                               ts_power: float = 6.0,
+                                               ct_power: float = 3.0,
+                                               correlation_method: str = 'pearson',
+                                               min_module_size: int = 30) -> Dict:
+        """
+        Complete pipeline: process tissue dict and construct inter-tissue network.
+        
+        Args:
+            tissue_expression_data: Dict mapping tissue names to expression matrices (genes x samples)
+            ts_power: Soft threshold power for tissue-specific connections
+            ct_power: Soft threshold power for cross-tissue connections
+            correlation_method: Correlation method
+            min_module_size: Minimum module size
+            
+        Returns:
+            Network construction results
+        """
+        if self.analysis_type != 'inter_tissue':
+            raise ValueError("Must set analysis_type to 'inter_tissue' first")
+        
+        print("=== Starting Complete Inter-Tissue Network Construction Pipeline ===")
+        
+        # Load and process tissue data
+        self.load_tissue_data_for_inter_tissue_analysis(tissue_expression_data)
+        
+        # Construct the network
+        results = self.construct_inter_tissue_network(
+            ts_power=ts_power,
+            ct_power=ct_power,
+            correlation_method=correlation_method,
+            min_module_size=min_module_size
+        )
+        
+        print("=== Inter-Tissue Network Construction Pipeline Completed ===")
+        return results
     
     def determine_inter_tissue_powers(self,
                                     powers_to_test: List[float] = None,

@@ -39,7 +39,7 @@ class InterTissueNetworkAnalysis:
         
         Args:
             tissue_expression_data: Dict mapping tissue names to expression matrices
-                                  (samples x genes)
+                                  Expected format: genes x samples (will be transposed internally)
             tissue_sample_mapping: Dict mapping tissue names to sample IDs
         """
         print("Loading tissue expression data...")
@@ -54,10 +54,27 @@ class InterTissueNetworkAnalysis:
         for tissue_name, expr_data in tissue_expression_data.items():
             print(f"Processing {tissue_name}: {expr_data.shape}")
             
-            # Store tissue data
-            tissue_genes = [f"{tissue_name}_{gene}" for gene in expr_data.columns]
+            # Ensure data is in samples x genes format (transpose if needed)
+            if expr_data.shape[0] > expr_data.shape[1]:
+                # Likely genes x samples, need to transpose
+                print(f"  Transposing {tissue_name} data from genes x samples to samples x genes")
+                expr_data_transposed = expr_data.T  # samples x genes
+                # Remove tissue prefix from gene names if present
+                gene_names = [gene.split('_', 1)[1] if '_' in gene else gene for gene in expr_data.index]
+            else:
+                # Already samples x genes
+                expr_data_transposed = expr_data
+                gene_names = list(expr_data.columns)
+            
+            # Create tissue-specific gene names (following R script format)
+            tissue_genes = [f"{tissue_name}_{gene}" for gene in gene_names]
+            
+            # Update column names to include tissue prefix
+            expr_data_with_tissue_names = expr_data_transposed.copy()
+            expr_data_with_tissue_names.columns = tissue_genes
+            
             self.tissue_data[tissue_name] = {
-                'expression': expr_data,
+                'expression': expr_data_with_tissue_names,  # samples x genes with tissue prefix
                 'genes': tissue_genes,
                 'samples': tissue_sample_mapping[tissue_name]
             }
@@ -69,6 +86,72 @@ class InterTissueNetworkAnalysis:
             current_position = end_idx
             
             all_gene_names.extend(tissue_genes)
+            
+            print(f"  Final {tissue_name} data: {expr_data_with_tissue_names.shape} (samples x genes)")
+        
+        self.all_gene_names = all_gene_names
+        print(f"Total genes across all tissues: {len(self.all_gene_names)}")
+        
+    def load_tissue_data_from_concatenated(self, 
+                                         concatenated_df: pd.DataFrame,
+                                         tissue_sample_mapping: Dict[str, List[str]]) -> None:
+        """
+        Load expression data from concatenated dataframe format.
+        
+        Args:
+            concatenated_df: DataFrame with columns ['tissue', 'gene', sample1, sample2, ...]
+            tissue_sample_mapping: Dict mapping tissue names to sample IDs
+        """
+        print("Loading tissue expression data from concatenated dataframe...")
+        
+        self.tissue_data = {}
+        self.tissue_indices = {}
+        
+        # Get expression columns (all columns except 'tissue' and 'gene')
+        expression_columns = concatenated_df.columns[2:]  # Skip first two columns
+        tissues = concatenated_df['tissue'].unique()
+        
+        # Track gene positions in the combined matrix
+        current_position = 0
+        all_gene_names = []
+        
+        for tissue_name in tissues:
+            print(f"Processing {tissue_name}...")
+            
+            # Filter data for this tissue
+            tissue_rows = concatenated_df[concatenated_df['tissue'] == tissue_name]
+            genes = tissue_rows['gene'].values
+            
+            # Create expression matrix for this tissue (genes x samples)
+            tissue_expr_data = tissue_rows[expression_columns]
+            tissue_expr_data.index = genes  # Set gene names as index
+            
+            # Transpose to samples x genes format
+            tissue_expr_transposed = tissue_expr_data.T  # samples x genes
+            
+            # Create tissue-specific gene names (following R script format)
+            tissue_genes = [f"{tissue_name}_{gene}" for gene in genes]
+            
+            # Update column names to include tissue prefix
+            tissue_expr_with_tissue_names = tissue_expr_transposed.copy()
+            tissue_expr_with_tissue_names.columns = tissue_genes
+            
+            self.tissue_data[tissue_name] = {
+                'expression': tissue_expr_with_tissue_names,  # samples x genes with tissue prefix
+                'genes': tissue_genes,
+                'samples': tissue_sample_mapping[tissue_name]
+            }
+            
+            # Track positions for adjacency matrix construction
+            start_idx = current_position
+            end_idx = current_position + len(tissue_genes)
+            self.tissue_indices[tissue_name] = (start_idx, end_idx)
+            current_position = end_idx
+            
+            all_gene_names.extend(tissue_genes)
+            
+            print(f"  {tissue_name} data: {tissue_expr_with_tissue_names.shape} (samples x genes)")
+            print(f"  Genes: {len(genes)}, Position range: [{start_idx}:{end_idx}]")
         
         self.all_gene_names = all_gene_names
         print(f"Total genes across all tissues: {len(self.all_gene_names)}")
@@ -272,6 +355,7 @@ class InterTissueNetworkAnalysis:
                                        correlation_method: str = 'pearson') -> pd.DataFrame:
         """
         Construct inter-tissue adjacency matrix using X-WGCNA methodology.
+        Following the R script AdjacencyFromExpr function exactly.
         
         Args:
             ts_power: Soft threshold power for tissue-specific connections
@@ -288,37 +372,45 @@ class InterTissueNetworkAnalysis:
         adj_matrix = np.zeros((total_genes, total_genes))
         
         tissue_names = list(self.tissue_data.keys())
+        total_tissues = len(tissue_names)
         
-        # 1. Calculate tissue-specific (TS) adjacencies
+        # Following R script logic exactly:
+        # for(i in 1:(total_tissues-1)) {
+        #   adj_mat[(tissue_index_adj[i]+1):tissue_index_adj[i+1], (tissue_index_adj[i]+1):tissue_index_adj[i+1]] <- 
+        #     abs(cor(vector_expr[[i]], method = cor_method))^TS_power
+        
         print("Calculating tissue-specific adjacencies...")
-        for tissue_name, (start_idx, end_idx) in self.tissue_indices.items():
+        for i in range(total_tissues - 1):  # R: 1:(total_tissues-1)
+            tissue_name = tissue_names[i]
+            start_idx, end_idx = self.tissue_indices[tissue_name]
             expr_data = self.tissue_data[tissue_name]['expression']
             
-            # Calculate correlation matrix for this tissue
-            corr_matrix = expr_data.T.corr(method=correlation_method)
+            print(f"  {tissue_name}: samples x genes = {expr_data.shape}")
+            
+            # Calculate correlation matrix (genes x genes)
+            # R script: cor(vector_expr[[i]]) where vector_expr[[i]] is samples x genes
+            corr_matrix = expr_data.corr(method=correlation_method)  # genes x genes correlation
             
             # Apply soft thresholding with TS power
             ts_adj = np.abs(corr_matrix.values) ** ts_power
-            np.fill_diagonal(ts_adj, 0)
+            np.fill_diagonal(ts_adj, 0)  # Set diagonal to 0
             
             # Place in the adjacency matrix
             adj_matrix[start_idx:end_idx, start_idx:end_idx] = ts_adj
             
-            print(f"  {tissue_name}: {ts_adj.shape} -> positions [{start_idx}:{end_idx}]")
-        
-        # 2. Calculate cross-tissue (CT) adjacencies
-        print("Calculating cross-tissue adjacencies...")
-        for i, tissue1 in enumerate(tissue_names):
-            for j, tissue2 in enumerate(tissue_names[i+1:], i+1):
-                print(f"  Processing {tissue1} - {tissue2}")
+            print(f"    TS adjacency shape: {ts_adj.shape} -> positions [{start_idx}:{end_idx}]")
+            
+            # Calculate cross-tissue adjacencies for this tissue with all subsequent tissues
+            # R script: for(j in (i+1):total_tissues)
+            for j in range(i + 1, total_tissues):
+                tissue2_name = tissue_names[j]
+                start2_idx, end2_idx = self.tissue_indices[tissue2_name]
                 
-                # Get tissue indices
-                start1, end1 = self.tissue_indices[tissue1]
-                start2, end2 = self.tissue_indices[tissue2]
+                print(f"  Cross-tissue: {tissue_name} - {tissue2_name}")
                 
-                # Find common samples
-                samples1 = set(self.tissue_data[tissue1]['samples'])
-                samples2 = set(self.tissue_data[tissue2]['samples'])
+                # Find common samples (R: common_Samples <- intersect(rownames(vector_expr[[i]]),rownames(vector_expr[[j]])))
+                samples1 = set(self.tissue_data[tissue_name]['expression'].index)
+                samples2 = set(self.tissue_data[tissue2_name]['expression'].index)
                 common_samples = list(samples1.intersection(samples2))
                 
                 if len(common_samples) < 5:
@@ -326,21 +418,48 @@ class InterTissueNetworkAnalysis:
                     continue
                 
                 # Get expression data for common samples
-                expr1 = self.tissue_data[tissue1]['expression'].loc[common_samples]
-                expr2 = self.tissue_data[tissue2]['expression'].loc[common_samples]
+                expr1 = self.tissue_data[tissue_name]['expression'].loc[common_samples]  # samples x genes1
+                expr2 = self.tissue_data[tissue2_name]['expression'].loc[common_samples]  # samples x genes2
                 
-                # Calculate cross-correlation
-                cross_corr = np.corrcoef(expr1.T, expr2.T)
-                cross_corr = cross_corr[0:expr1.shape[1], expr1.shape[1]:]
+                print(f"    Expr1 shape: {expr1.shape}, Expr2 shape: {expr2.shape}")
+                
+                # Calculate cross-correlation between tissues
+                # R: cor(vector_expr[[i]][common_Samples,],vector_expr[[j]][common_Samples,], method = cor_method)
+                # This should be genes1 x genes2 correlation matrix
+                cross_corr = np.corrcoef(expr1.T, expr2.T)  # Transpose to get gene x sample, then correlate
+                
+                # Extract the cross-correlation part (genes1 x genes2)
+                n_genes1 = expr1.shape[1]
+                n_genes2 = expr2.shape[1]
+                cross_corr_block = cross_corr[0:n_genes1, n_genes1:n_genes1+n_genes2]
                 
                 # Apply soft thresholding with CT power
-                ct_adj = np.abs(cross_corr) ** ct_power
+                ct_adj = np.abs(cross_corr_block) ** ct_power
+                
+                print(f"    Cross-correlation shape: {cross_corr_block.shape}")
+                print(f"    Placing at positions [{start_idx}:{end_idx}, {start2_idx}:{end2_idx}]")
                 
                 # Place in adjacency matrix (symmetric)
-                adj_matrix[start1:end1, start2:end2] = ct_adj
-                adj_matrix[start2:end2, start1:end1] = ct_adj.T
-                
-                print(f"    Cross-correlation shape: {cross_corr.shape}")
+                # R: adj_mat[(tissue_index_adj[i]+1):tissue_index_adj[i+1],(tissue_index_adj[j]+1):tissue_index_adj[j+1]]
+                adj_matrix[start_idx:end_idx, start2_idx:end2_idx] = ct_adj
+                # R: adj_mat[(tissue_index_adj[j]+1):tissue_index_adj[j+1],(tissue_index_adj[i]+1):tissue_index_adj[i+1]] <- t(...)
+                adj_matrix[start2_idx:end2_idx, start_idx:end_idx] = ct_adj.T
+        
+        # Handle the last tissue's self-correlation
+        # R: adj_mat[(tissue_index_adj[total_tissues]+1):tissue_index_adj[total_tissues+1],
+        #            (tissue_index_adj[total_tissues]+1):tissue_index_adj[total_tissues+1]] <- 
+        #     abs(cor(vector_expr[[total_tissues]], method = cor_method))^TS_power
+        if total_tissues > 0:
+            last_tissue_name = tissue_names[total_tissues - 1]
+            start_idx, end_idx = self.tissue_indices[last_tissue_name]
+            expr_data = self.tissue_data[last_tissue_name]['expression']
+            
+            corr_matrix = expr_data.corr(method=correlation_method)
+            ts_adj = np.abs(corr_matrix.values) ** ts_power
+            np.fill_diagonal(ts_adj, 0)
+            
+            adj_matrix[start_idx:end_idx, start_idx:end_idx] = ts_adj
+            print(f"  Final tissue {last_tissue_name}: TS adjacency {ts_adj.shape}")
         
         # Create DataFrame
         self.adjacency_matrix = pd.DataFrame(

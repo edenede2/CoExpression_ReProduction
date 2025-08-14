@@ -26,14 +26,14 @@ rm(list = ls())
 library(lattice) # require is design for use inside functions 
 library(plotrix)
 #library(sma) # this is needed for plot.mat below
-source("R-functions_MDC.R")
-source("colPalette_200.txt")
+source("/Users/edeneldar/CoExpression_ReProduction/old_scripts/R-functions_MDC.R")
+source("/Users/edeneldar/CoExpression_ReProduction/old_scripts/colPalette_200.txt")
 
 
 ##### 
-inputfnameB       = "adj_mat_young.Rds"; headCol2 =2;
-inputfnameBModule = "Clusters_table_young.txt"
-inputfname        = "adj_mat_old.Rds"; headCol =2;
+inputfnameB       = "/Users/edeneldar/CoExpression_ReProduction/xwgcna_young_original_run9_adjacency.rds"; headCol2 =2;
+inputfnameBModule = "/Users/edeneldar/CoExpression_ReProduction/xwgcna_young_original_run9_Clusters_table.txt"
+inputfname        = "/Users/edeneldar/CoExpression_ReProduction/xwgcna_old_original_run9_adjacency.rds"; headCol =2;
 shortnames        = c("young", "old")
 corrlpower        = 6
 

@@ -7,6 +7,11 @@ filtered_samples/
 *.gct
 *.tsv
 *.csv
+*.txt
+
+# R scripts
+*.rds
+*.RData
 
 # Python cache
 __pycache__/

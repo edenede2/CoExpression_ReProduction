@@ -44,8 +44,8 @@ class GTExDataReader:
                 print(f"Warning: Using default data directory: {self.data_dir.absolute()}")
         else:
             self.data_dir = Path(data_dir)
-        
-    def read_gct_file(self, gct_file: str, sample_limit: Optional[int] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
+
+    def read_gct_file(self, gct_file: str, pcg_list: List[str] = None, sample_limit: Optional[int] = None) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Read GTEx GCT format file efficiently.
         
@@ -71,7 +71,7 @@ class GTExDataReader:
             header_line = f.readline().strip()
             columns = header_line.split('\t')
             
-            # First two columns are gene ID and description
+            # Keep the first two columns for gene ID and description
             gene_id_col = columns[0]
             gene_desc_col = columns[1]
             sample_ids = columns[2:]
@@ -84,12 +84,12 @@ class GTExDataReader:
         print(f"Dimensions: {n_genes} genes, {n_samples} samples")
         print(f"Preparing to read {n_samples} samples")
         
-        # Preallocate numpy array for better memory efficiency
+        # Prepare numpy array for better memory efficiency
         expr_matrix = np.zeros((n_genes, n_samples))
         gene_ids = []
         gene_descriptions = []
         
-        # Second pass: read the data efficiently
+        # Second pass: read the data
         with open(gct_path, 'r') as f:
             # Skip header lines
             for _ in range(3):
@@ -115,7 +115,10 @@ class GTExDataReader:
                     parts = line.strip().split('\t')
                     gene_id = parts[0]
                     gene_desc = parts[1]
-                    expression_values = parts[2:2+n_samples] if not sample_limit else parts[2:2+n_samples]
+                    if pcg_list and gene_id not in pcg_list:
+                        continue
+                    
+                    expression_values = parts[2:2+n_samples]
                     
                     # Convert to float
                     try:
@@ -128,7 +131,6 @@ class GTExDataReader:
                         # Fill with zeros
                         gene_ids.append(gene_id)
                         gene_descriptions.append(gene_desc)
-                        # We keep the zeros that were preallocated
                 
                 genes_read += len(chunk_lines)
                 print(f"Processed {genes_read}/{n_genes} genes ({genes_read/n_genes*100:.1f}%)...")
@@ -191,6 +193,72 @@ class GTExDataReader:
         
         print(f"Found {len(protein_coding)} protein coding genes")
         return protein_coding
+    
+    def align_expression_with_metadata(self, 
+                                     expression_df: pd.DataFrame,
+                                     sample_attrs: pd.DataFrame,
+                                     subject_phenos: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        """
+        Efficiently align expression data with metadata by keeping only samples present in all datasets.
+        
+        Args:
+            expression_df: Expression data DataFrame (genes x samples)
+            sample_attrs: Sample attributes DataFrame 
+            subject_phenos: Subject phenotypes DataFrame
+            
+        Returns:
+            Tuple of (aligned_expression_df, aligned_sample_attrs, aligned_subject_phenos)
+        """
+        print("Aligning expression data with metadata...")
+        
+        # Get sample IDs efficiently using Index objects for faster operations
+        expr_samples = expression_df.columns
+        attr_samples = sample_attrs.index
+        
+        print(f"Expression data samples: {len(expr_samples)}")
+        print(f"Sample attributes: {len(attr_samples)}")
+        print(f"Subject phenotypes: {len(subject_phenos)}")
+        
+        # Find common samples using pandas Index intersection (much faster than set operations)
+        common_samples = expr_samples.intersection(attr_samples)
+        print(f"Common samples (expression + attributes): {len(common_samples)}")
+        
+        if len(common_samples) == 0:
+            raise ValueError("No common samples found between expression data and sample attributes!")
+        
+        # Convert to sorted list for consistent ordering
+        common_samples_sorted = sorted(common_samples)
+        
+        # Extract subject IDs efficiently using vectorized string operations
+        print("Extracting subject IDs...")
+        sample_to_subject = pd.Series(common_samples_sorted).str.extract(r'(GTEX-[^-]+)', expand=False)
+        valid_subjects = sample_to_subject.dropna().unique()
+        
+        # Find subjects that exist in phenotype data
+        available_subjects = subject_phenos.index.intersection(valid_subjects)
+        print(f"Common subjects (expression + phenotypes): {len(available_subjects)}")
+        
+        if len(available_subjects) == 0:
+            raise ValueError("No common subjects found between expression data and phenotypes!")
+        
+        # Create mapping from subject to samples for efficient filtering
+        subject_mask = sample_to_subject.isin(available_subjects)
+        final_samples = [sample for i, sample in enumerate(common_samples_sorted) if subject_mask.iloc[i]]
+        
+        print(f"Final samples after subject filtering: {len(final_samples)}")
+        
+        # Efficient filtering using .loc (avoids copying until necessary)
+        print("Filtering datasets...")
+        aligned_expression = expression_df.loc[:, final_samples]
+        aligned_sample_attrs = sample_attrs.loc[final_samples]
+        aligned_subject_phenos = subject_phenos.loc[available_subjects]
+        
+        print("Final aligned datasets:")
+        print(f"  Expression: {aligned_expression.shape}")
+        print(f"  Sample attributes: {aligned_sample_attrs.shape}")
+        print(f"  Subject phenotypes: {aligned_subject_phenos.shape}")
+        
+        return aligned_expression, aligned_sample_attrs, aligned_subject_phenos
     
     def get_tissue_samples(self, sample_attrs: pd.DataFrame, tissue_name: str) -> List[str]:
         """
@@ -284,7 +352,7 @@ class GTExDataReader:
             # Age group filter
             if age_group:
                 if age_group == 'young':
-                    # Include young adults: 20-29 and 30-39
+                    # Include young adults: 20-29, 30-39, 40-49, and 50-59
                     filtered_with_pheno = filtered_with_pheno[filtered_with_pheno['AGE'].isin(['20-29', '30-39','40-49', '50-59'])]
                 elif age_group == 'old':
                     # Include older adults: 60-69 and 70-79
