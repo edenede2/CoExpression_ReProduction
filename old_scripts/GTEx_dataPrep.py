@@ -2,6 +2,7 @@
 import pandas as pd
 import os 
 from pathlib import Path
+import re
 import copy
 import pickle
 
@@ -43,6 +44,11 @@ def filter_non_protein_coding(HGNC_list, GTEx_tpm):
     
     HGNC_list.rename(columns={'symbol':'PCG Symbols'},inplace=True)
     PCG_list = HGNC_list['PCG Symbols'].tolist()
+    pcg_symbols = set(HGNC_list['PCG Symbols'].dropna().tolist())
+
+    df = GTEx_tpm[GTEx_tpm['Description'].isin(pcg_symbols)].copy()
+
+    df['ensembel_id']
 
     matrix_pcg_df = GTEx_tpm[GTEx_tpm['Description'].isin(PCG_list)]
     pcg_dictionary = matrix_pcg_df[['Name','Description']]
