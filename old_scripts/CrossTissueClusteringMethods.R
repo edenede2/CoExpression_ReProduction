@@ -972,7 +972,6 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
   }
 }
 
-# בחירת בטא TS לרקמה בודדת
 .pick_TS_power_one <- function(expr, beta_grid, cor_method = "pearson", targetR2 = 0.80) {
   sft <- WGCNA::pickSoftThreshold(
     expr,
@@ -985,7 +984,6 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
   .choose_power_from_pickSoft(sft, targetR2 = targetR2)
 }
 
-# בחירת בטא CT לזוג רקמות (יעיל: לא בונים מטריצה סימטרית 2n x 2n, אלא k = [rowSums, colSums])
 .pick_CT_power_pair <- function(S_abs, beta_grid, targetR2 = 0.80) {
   best_beta <- NA_integer_; best_r2 <- -Inf
   for (b in beta_grid) {
@@ -993,7 +991,7 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
     k <- c(rowSums(B), colSums(B))
     r2 <- tryCatch(checkScaleFree(k)$Rsquared.SFT, error = function(e) NA_real_)
     if (!is.na(r2) && r2 >= targetR2) {
-      return(b)  # בחר את המינימלי שמגיע ליעד
+      return(b)  
     }
     if (!is.na(r2) && r2 > best_r2) {
       best_r2 <- r2; best_beta <- b
@@ -1002,7 +1000,6 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
   best_beta
 }
 
-# פונ' ראשית לבחירה אוטומטית של TS/CT על בסיס אותם פילטרים של LoadExprData
 auto_pick_powers <- function(
     tissue_names,
     tissue_expr_file_names,
@@ -1034,7 +1031,6 @@ auto_pick_powers <- function(
     donors_list[[i]] <- .aggregate_by_donor(X)
   }
   
-  # 2) TS: בוחרים בטא לכל רקמה ומאגדים (מֶדְיָן לרוב יציב)
   TS_per_tissue <- integer(T)
   for (i in seq_len(T)) {
     sft <- tryCatch(

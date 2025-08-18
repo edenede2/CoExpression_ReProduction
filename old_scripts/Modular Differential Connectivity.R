@@ -37,6 +37,11 @@ inputfname        = "/Users/edeneldar/CoExpression_ReProduction/xwgcna_old_origi
 shortnames        = c("young", "old")
 corrlpower        = 6
 
+# MDC powers for expression-based MDC computation (sample permutations only)
+# Apply TS (within-tissue) pairs with power 3 and CT (cross-tissue) pairs with power 6
+if (!exists("MDC_TS_POWER")) MDC_TS_POWER <- 3
+if (!exists("MDC_CT_POWER")) MDC_CT_POWER <- 6
+
 
 files_old_shaked <- c(
   Adipose="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Adipose - Subcutaneous_old.csv",
@@ -182,13 +187,25 @@ validateMDC <- function(no_perms = NO_PERMS,
 
         # helpers
         permuteVect <- function(v) sample(v, length(v), replace = FALSE)
-        compute_MDC_expr <- function(exprB, exprA, idx, power = corrlpower) {
+        compute_MDC_expr <- function(exprB, exprA, idx, ts_power = MDC_TS_POWER, ct_power = MDC_CT_POWER) {
           if (length(idx) < 2) return(NA_real_)
           XB <- exprB[, idx, drop = FALSE]
           XA <- exprA[, idx, drop = FALSE]
-          corB <- abs(stats::cor(XB, use = "pairwise.complete.obs"))^power; diag(corB) <- 0
-          corA <- abs(stats::cor(XA, use = "pairwise.complete.obs"))^power; diag(corA) <- 0
-          lower_mean_local(corB) / lower_mean_local(corA)
+          # Determine tissue for each column (expects Tissue_Gene)
+          gnames <- colnames(XB)
+          tissues <- sub("_.*$", "", gnames)
+          same_tissue <- outer(tissues, tissues, FUN = "==")
+          # Correlations for young (B) and old (A)
+          RB <- abs(stats::cor(XB, use = "pairwise.complete.obs")); diag(RB) <- 0
+          RA <- abs(stats::cor(XA, use = "pairwise.complete.obs")); diag(RA) <- 0
+          # Apply pair-specific powers: TS -> ts_power, CT -> ct_power
+          CB <- RB
+          CA <- RA
+          CB[same_tissue] <- CB[same_tissue]^ts_power
+          CB[!same_tissue] <- CB[!same_tissue]^ct_power
+          CA[same_tissue] <- CA[same_tissue]^ts_power
+          CA[!same_tissue] <- CA[!same_tissue]^ct_power
+          lower_mean_local(CB) / lower_mean_local(CA)
         }
 
         for (i in seq_len(no_perms)) {
@@ -197,7 +214,7 @@ validateMDC <- function(no_perms = NO_PERMS,
           XAO <- apply(EO, 2, permuteVect)
           for (x in seq_along(mod_idx_in_expr)) {
             idx <- mod_idx_in_expr[[x]]
-            random_samples[x, i] <- compute_MDC_expr(XBY, XAO, idx, power = corrlpower)
+            random_samples[x, i] <- compute_MDC_expr(XBY, XAO, idx, ts_power = MDC_TS_POWER, ct_power = MDC_CT_POWER)
           }
           collect_garbage()
         }
@@ -205,23 +222,21 @@ validateMDC <- function(no_perms = NO_PERMS,
     }
   }
 
-  # Empirical p-values (two-sided on log2 scale) unless a custom function is provided
+  # Empirical p-values (one-sided; more connected in young → MDC > 1) unless a custom function is provided
   p_values <- NULL
   p_values_samples <- NULL
   if (isTRUE(COMPUTE_PVALUES) && exists("yfold") && !is.null(random_genes)) {
     if (is.null(get_pVal)) {
-      # Default empirical p-values per module using gene permutations
+      # Default empirical p-values per module using gene permutations (upper-tail)
       p_values <- rep(NA_real_, length(yfold))
-      obs_log <- log2(yfold)
       for (r in seq_along(yfold)) {
         perms <- random_genes[r, ]
         perms <- perms[is.finite(perms)]
-        if (length(perms) < 3 || !is.finite(obs_log[r])) {
+        if (length(perms) < 3 || !is.finite(yfold[r])) {
           p_values[r] <- NA_real_
         } else {
-          perm_log <- log2(perms)
-          # Two-sided: extremeness on log-scale
-          p_values[r] <- (1 + sum(abs(perm_log) >= abs(obs_log[r]))) / (length(perm_log) + 1)
+          # One-sided: probability permutation MDC >= observed MDC
+          p_values[r] <- (1 + sum(perms >= yfold[r])) / (length(perms) + 1)
         }
       }
     } else {
@@ -235,15 +250,14 @@ validateMDC <- function(no_perms = NO_PERMS,
   if (isTRUE(COMPUTE_PVALUES) && exists("yfold") && !is.null(random_samples)) {
     if (is.null(get_pVal)) {
       p_values_samples <- rep(NA_real_, length(yfold))
-      obs_log <- log2(yfold)
       for (r in seq_along(yfold)) {
         perms <- random_samples[r, ]
         perms <- perms[is.finite(perms)]
-        if (length(perms) < 3 || !is.finite(obs_log[r])) {
+        if (length(perms) < 3 || !is.finite(yfold[r])) {
           p_values_samples[r] <- NA_real_
         } else {
-          perm_log <- log2(perms)
-          p_values_samples[r] <- (1 + sum(abs(perm_log) >= abs(obs_log[r]))) / (length(perm_log) + 1)
+          # One-sided: probability permutation MDC >= observed MDC
+          p_values_samples[r] <- (1 + sum(perms >= yfold[r])) / (length(perms) + 1)
         }
       }
     } else {
