@@ -37,14 +37,233 @@ inputfname        = "/Users/edeneldar/CoExpression_ReProduction/xwgcna_old_origi
 shortnames        = c("young", "old")
 corrlpower        = 6
 
+
+files_old_shaked <- c(
+  Adipose="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Adipose - Subcutaneous_old.csv",
+  Muscle ="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Muscle - Skeletal_old.csv",
+  Brain  ="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Brain - Cortex_old.csv"
+)
+
+
+files_young_shaked <- c(
+  Adipose="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Adipose - Subcutaneous_young.csv",
+  Muscle ="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Muscle - Skeletal_young.csv",
+  Brain  ="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Brain - Cortex_young.csv"
+)
+
+
+# ------------------- helpers to assemble expression matrices -------------------
+.extract_donor <- function(x) sub("^([^-]+-[^-]+).*", "\\1", x)
+
+read_tissue_expr <- function(path, tissue, check.names=FALSE) {
+  X <- read.csv(path, check.names = check.names)
+  if (ncol(X) < 2) stop(paste0("Bad CSV for ", tissue, ": expect first column=sample IDs, others=genes"))
+  rownames(X) <- X[,1]
+  X <- as.matrix(X[,-1, drop=FALSE])
+  colnames(X) <- paste0(tissue, "_", colnames(X))  # Tissue_Gene
+  storage.mode(X) <- "double"
+  X
+}
+
+aggregate_by_donor <- function(M) {
+  d <- .extract_donor(rownames(M))
+  idx <- split(seq_len(nrow(M)), d)
+  A <- do.call(rbind, lapply(idx, function(ix) colMeans(M[ix, , drop=FALSE], na.rm=TRUE)))
+  rownames(A) <- names(idx)
+  A
+}
+
+assemble_cohort_matrix <- function(files_by_tissue) {
+  mats <- lapply(names(files_by_tissue), function(t) {
+    M <- read_tissue_expr(files_by_tissue[[t]], t)
+    aggregate_by_donor(M)
+  })
+  names(mats) <- names(files_by_tissue)
+  all_donors <- sort(unique(unlist(lapply(mats, rownames))))
+  all_genes  <- sort(unique(unlist(lapply(mats, colnames))))
+  Z <- matrix(NA_real_, nrow=length(all_donors), ncol=length(all_genes),
+              dimnames=list(all_donors, all_genes))
+  for (t in names(mats)) {
+    Z[rownames(mats[[t]]), colnames(mats[[t]])] <- mats[[t]]
+  }
+  Z
+}
+
+# ------------------- build expr matrices if file paths are provided -----------
+if (exists("files_old_shaked") && exists("files_young_shaked")) {
+  message("Assembling cohort matrices for sample permutations ...")
+  expr_old   <- assemble_cohort_matrix(files_old_shaked)
+  expr_young <- assemble_cohort_matrix(files_young_shaked)
+  common <- intersect(colnames(expr_old), colnames(expr_young))
+  if (length(common) >= 2) {
+    expr_old   <- expr_old[,   common, drop=FALSE]
+    expr_young <- expr_young[, common, drop=FALSE]
+    message(sprintf("OLD: %d donors × %d genes | YOUNG: %d donors × %d genes | Common genes: %d",
+                    nrow(expr_old), ncol(expr_old), nrow(expr_young), ncol(expr_young), length(common)))
+  } else {
+    warning("No common genes between old/young expression inputs; sample permutations will be skipped.")
+  }
+}
+
+
+# User-tunable parameters (can be overridden before sourcing this file)
+if (!exists("NO_PERMS")) NO_PERMS <- 50
+if (!exists("PERMUTE_GENES")) PERMUTE_GENES <- TRUE
+if (!exists("PERMUTE_SAMPLES")) PERMUTE_SAMPLES <- FALSE  
+if (!exists("COMPUTE_PVALUES")) COMPUTE_PVALUES <- TRUE
+
+# Finish and generalize permutation-based validation
+validateMDC <- function(no_perms = NO_PERMS,
+                        permute_genes = PERMUTE_GENES,
+                        permute_samples = PERMUTE_SAMPLES,
+                        get_pVal = NULL) {
+  # Dependencies: uses datExpr, datExpr2, modtb, no.genes, no.modules, yfold from parent env
+  # Returns: list(random_genes, random_samples, p_values)
+
+  # Sanity checks
+  if (!exists("datExpr") || !exists("datExpr2")) stop("datExpr/datExpr2 not found. Load adjacency matrices first.")
+  if (!exists("modtb")) stop("modtb (module sizes) not found. Build modules first.")
+  if (!exists("yfold")) warning("Observed MDC (yfold) not found yet; p-values will be NA unless computed later.")
+
+  # Helper: robust lower-tri mean of absolute values
+  lower_mean_local <- function(M) {
+    if (is.null(M) || any(dim(M) == 0)) return(NA_real_)
+    diag(M) <- 0
+    m <- abs(M)
+    mean(m[lower.tri(m)], na.rm = TRUE)
+  }
+
+  random_genes <- if (isTRUE(permute_genes)) matrix(NA_real_, nrow = length(modtb), ncol = no_perms) else NULL
+  random_samples <- if (isTRUE(permute_samples)) matrix(NA_real_, nrow = length(modtb), ncol = no_perms) else NULL
+
+  # Gene-label permutations: sample random gene sets matching each module size
+  if (isTRUE(permute_genes)) {
+    for (i in seq_len(no_perms)) {
+      if (i %% 5 == 0) {
+        print(paste("********* random genes", i, " ........"))
+      }
+      for (x in seq_along(modtb)) {
+        k <- as.integer(modtb[x])
+        if (is.na(k) || k < 2) {
+          random_genes[x, i] <- NA_real_
+          next
+        }
+        xsel <- sample.int(no.genes, k, replace = FALSE)
+        A <- datExpr [xsel, xsel, drop = FALSE]  # old
+        B <- datExpr2[xsel, xsel, drop = FALSE]  # young
+        # Ratio consistent with yfold definition below (young/old)
+        random_genes[x, i] <- lower_mean_local(B) / lower_mean_local(A)
+      }
+      collect_garbage()
+    }
+  }
+
+  # Sample-label permutations using raw expression matrices (if available)
+  if (isTRUE(permute_samples)) {
+    # Expect global expr_young and expr_old matrices with donor rows and gene columns matching Tissue_Gene IDs
+    if (!exists("expr_young") || !exists("expr_old")) {
+      warning("permute_samples=TRUE, but expr_young/expr_old not found; skipping sample permutations.")
+      random_samples <- NULL
+    } else {
+      # Align expression matrices to a common gene set and to module gene IDs
+      genes_adj <- colnames(datExpr2)
+      common <- intersect(intersect(colnames(expr_young), colnames(expr_old)), genes_adj)
+      if (length(common) < 2) {
+        warning("No overlapping genes between expression matrices and adjacency/module labels; skipping sample permutations.")
+        random_samples <- NULL
+      } else {
+        EY <- expr_young[, common, drop = FALSE]
+        EO <- expr_old  [, common, drop = FALSE]
+        # Map module indices in expression space
+        mod_idx_in_expr <- lapply(modulenames, function(mcol) {
+          gnames <- genes_adj[modulescolorB == mcol]
+          which(colnames(EY) %in% gnames)
+        })
+
+        # helpers
+        permuteVect <- function(v) sample(v, length(v), replace = FALSE)
+        compute_MDC_expr <- function(exprB, exprA, idx, power = corrlpower) {
+          if (length(idx) < 2) return(NA_real_)
+          XB <- exprB[, idx, drop = FALSE]
+          XA <- exprA[, idx, drop = FALSE]
+          corB <- abs(stats::cor(XB, use = "pairwise.complete.obs"))^power; diag(corB) <- 0
+          corA <- abs(stats::cor(XA, use = "pairwise.complete.obs"))^power; diag(corA) <- 0
+          lower_mean_local(corB) / lower_mean_local(corA)
+        }
+
+        for (i in seq_len(no_perms)) {
+          if (i %% 5 == 0) print(paste("********* random samples", i, " ........"))
+          XBY <- apply(EY, 2, permuteVect)
+          XAO <- apply(EO, 2, permuteVect)
+          for (x in seq_along(mod_idx_in_expr)) {
+            idx <- mod_idx_in_expr[[x]]
+            random_samples[x, i] <- compute_MDC_expr(XBY, XAO, idx, power = corrlpower)
+          }
+          collect_garbage()
+        }
+      }
+    }
+  }
+
+  # Empirical p-values (two-sided on log2 scale) unless a custom function is provided
+  p_values <- NULL
+  p_values_samples <- NULL
+  if (isTRUE(COMPUTE_PVALUES) && exists("yfold") && !is.null(random_genes)) {
+    if (is.null(get_pVal)) {
+      # Default empirical p-values per module using gene permutations
+      p_values <- rep(NA_real_, length(yfold))
+      obs_log <- log2(yfold)
+      for (r in seq_along(yfold)) {
+        perms <- random_genes[r, ]
+        perms <- perms[is.finite(perms)]
+        if (length(perms) < 3 || !is.finite(obs_log[r])) {
+          p_values[r] <- NA_real_
+        } else {
+          perm_log <- log2(perms)
+          # Two-sided: extremeness on log-scale
+          p_values[r] <- (1 + sum(abs(perm_log) >= abs(obs_log[r]))) / (length(perm_log) + 1)
+        }
+      }
+    } else {
+      # Allow user to supply a custom p-value function
+      # Expected signature: get_pVal(observed_vector, perm_matrix) -> vector p-values
+      p_values <- tryCatch(get_pVal(yfold, random_genes), error = function(e) {
+        warning(paste("get_pVal failed:", e$message)); NULL
+      })
+    }
+  }
+  if (isTRUE(COMPUTE_PVALUES) && exists("yfold") && !is.null(random_samples)) {
+    if (is.null(get_pVal)) {
+      p_values_samples <- rep(NA_real_, length(yfold))
+      obs_log <- log2(yfold)
+      for (r in seq_along(yfold)) {
+        perms <- random_samples[r, ]
+        perms <- perms[is.finite(perms)]
+        if (length(perms) < 3 || !is.finite(obs_log[r])) {
+          p_values_samples[r] <- NA_real_
+        } else {
+          perm_log <- log2(perms)
+          p_values_samples[r] <- (1 + sum(abs(perm_log) >= abs(obs_log[r]))) / (length(perm_log) + 1)
+        }
+      }
+    } else {
+      p_values_samples <- tryCatch(get_pVal(yfold, random_samples), error = function(e) {
+        warning(paste("get_pVal failed (samples):", e$message)); NULL
+      })
+    }
+  }
+
+  list(random_genes = random_genes, random_samples = random_samples, p_values = p_values, p_values_samples = p_values_samples)
+}
 #
 # -----------------------------End of Parameters to be changed --------------------------------------
 
-no.perms = 50
+# Number of permutations used by this run
+no.perms = NO_PERMS
 imgwid=600; imghei=400
 
 #heatmapColorRG = rev( rgcolors.func(50) )
-heatmapColor = heat.colors(50)
+heatmapColor = rev(heat.colors(100))
 
 # specify the directory for holding analysis results, you need make such a sub-directory 
 #    under your working directory if it doesn't exist
@@ -176,132 +395,108 @@ for (x in seq_len(no.modules)) {
 
 yfold <- meanPermodule[, 1] / meanPermodule[, 2]
 
-USE_SAMPLE_PERMS <- FALSE
+USE_SAMPLE_PERMS <- PERMUTE_SAMPLES
 
 
 #############################################################################
-#-------------------- permute genes ---------------------------------------
-#
-no.perms = 50
-GlobalyRandomMDC = NULL
-for( y in c(1:no.perms) ) {
-  if(y%%5==0) {
-    print(paste("********* random genes", y, " ........"))
+#-------------------- run permutations via validateMDC ---------------------
+
+# perm_res_Genes50 <- validateMDC(no_perms = 50,
+#                         permute_genes = PERMUTE_GENES,
+#                         permute_samples = FALSE)
+
+# perm_res_Genes100 <- validateMDC(no_perms = 100,
+#                         permute_genes = PERMUTE_GENES,
+#                         permute_samples = FALSE)
+
+perm_res50 <- validateMDC(no_perms = 50,
+                        permute_genes = PERMUTE_GENES,
+                        permute_samples = TRUE)
+
+perm_res100 <- validateMDC(no_perms = 100,
+                        permute_genes = PERMUTE_GENES,
+                        permute_samples = TRUE)
+
+# GlobalyRandomMDC_genes50 <- perm_res_Genes50$random_genes
+# GlobalyRandomMDC_genes100 <- perm_res_Genes100$random_genes
+
+GlobalyRandomMDC_genes50 <- perm_res50$random_genes
+GlobalyRandomMDC_genes100 <- perm_res100$random_genes
+SampleRandomMDC_50 <- perm_res50$random_samples
+SampleRandomMDC_100 <- perm_res100$random_samples
+
+# Helper to write outputs for a single validation
+write_validation_outputs <- function(run_tag, perm_res_obj) {
+  RG <- perm_res_obj$random_genes
+  RS <- perm_res_obj$random_samples
+
+  # FDRs per family
+  if (!is.null(RG)) {
+    GR_FDR <- apply(cbind(yfold, RG), 1, MDC_FDR)
+  } else {
+    GR_FDR <- rep(NA_real_, length(yfold))
   }
-  
-  GRmeanPermodule   = matrix(0, no.modules, no.nets)
-  for ( x in c(1:no.modules) ) {
-    
-    xsel = sample(c(1:no.genes), as.integer(modtb[x]), replace=F)
-    corhelp <- datExpr[xsel, xsel]
-    diag(corhelp) <- 0
-    links   <- apply(abs(corhelp), 1, sum, na.rm=T)
-    
-    lpanel  <- lower.tri(corhelp)
-    corhelp <- abs(corhelp[lpanel])
-    isel    <- !is.na(corhelp)
-    no.corrls = length(corhelp)
-    
-    corhelp <- corhelp[isel]
-    
-    # ---------------------------------------------------------------
-    corhelp2 <-datExpr2[xsel, xsel]
-    diag(corhelp2) <- 0
-    links2   <- apply(abs(corhelp2), 1, sum, na.rm=T)
-    
-    corhelp2 <- abs(corhelp2[lpanel])
-    isel     <- !is.na(corhelp2)
-    corhelp2 <- corhelp2[isel]
-    
-    GRmeanPermodule[x, 1] = mean(corhelp2, na.rm=T)
-    GRmeanPermodule[x, 2] = mean(corhelp, na.rm=T)
-    
-    rm(corhelp2)
-    rm(corhelp)
-    collect_garbage()
+  if (!is.null(RS)) {
+    mdcFDR <- apply(cbind(yfold, RS), 1, MDC_FDR)
+  } else {
+    mdcFDR <- rep(NA_real_, length(yfold))
   }
-  GlobalyRandomMDC = cbind(GlobalyRandomMDC, GRmeanPermodule[,1]/GRmeanPermodule[,2])
+  comFDR <- pmax(GR_FDR, mdcFDR, na.rm = TRUE)
+  comFDR[!is.finite(comFDR)] <- NA_real_
+
+  # Save randoms
+  if (!is.null(RG)) {
+    flog_genes  <- paste(outputDir1, fname, "_", run_tag, "_Randoms_genes", ".xls", sep='')
+    xfinal <- cbind(module = modulenames, RG)
+    colnames(xfinal) <- c("module", sprintf("MDC_random_genes_%d", seq_len(ncol(RG))))
+    write.table(xfinal, flog_genes, sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+  }
+  if (!is.null(RS)) {
+    flog_samples  <- paste(outputDir1, fname, "_", run_tag, "_Randoms_samples", ".xls", sep='')
+    xsamp <- cbind(module = modulenames, RS)
+    colnames(xsamp) <- c("module", sprintf("MDC_random_samples_%d", seq_len(ncol(RS))))
+    write.table(xsamp, flog_samples, sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+  }
+
+  # Final table
+  final <- cbind(modulenames, round(yfold, 4),
+                 signif(comFDR, 4),
+                 signif(mdcFDR, 4),
+                 signif(GR_FDR, 4),
+                 signif(if (!is.null(perm_res_obj$p_values)) perm_res_obj$p_values else NA_real_, 4),
+                 signif(if (!is.null(perm_res_obj$p_values_samples)) perm_res_obj$p_values_samples else NA_real_, 4))
+  colnames(final) <- c("module", "MDC", "FDR", "FDR_random_samples", "FDR_random_genes", "p_empirical_genes", "p_empirical_samples")
+
+  flog2_run <- paste(outputDir1, fname, "_", run_tag, "_wFDR", ".xls", sep='')
+  write.table(final, flog2_run, sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
+
+  # Per-run barplot
+  rylab <- paste("MDC(", shortnames[1], ", ", shortnames[2], ")", sep="")
+  od <- order(-yfold)
+  dispDat <- cbind(yfold[od]); dispNames <- modulenames[od]
+  rownames(dispDat) <- dispNames
+  dispSign <- ifelse(comFDR[od] <= 0.10, "*", "")
+  yymax <- closest_integer_bound(max(yfold))
+  fimgRt_run <- paste(outputDir1, fname, "_", run_tag, ".png", sep='')
+  barplot_by_oneGroup(datMatrix=dispDat, maskMatrix=cbind(dispSign), 
+                      rowcol=col.names[1:length(dispNames)], vlines=c(2,1.5,1),
+                      title="", ylab=rylab, imgfile=fimgRt_run, imgwid=2000, imghei=800, 
+                      mcex=0.5, xlab_cex=0.65, xaxisLabel_rotate=45, legendcols=1, legendxDelta=0, legendCex=1, 
+                      ipointsize=12, iunits="px", ires=300, icompression="lzw",
+                      show_value=FALSE, showLegend=FALSE, show_xaxisLabel=TRUE, show_mask=TRUE,
+                      xmargin=3, ymargin=5, zmargin=0.5, xlabel_orientation=0, ValueXdelta=0, 
+                      ValueYdelta=2*yymax/100, valuecex=1, yMAX=yymax, yMIN=0)
 }
 
-# After computing GlobalyRandomMDC and GR_FDR:
-GRMDC_mean = apply(GlobalyRandomMDC, 1, mean)
-GRMDC_sd   = apply(GlobalyRandomMDC, 1, sd)
-GR_Dat     = cbind(yfold, GRMDC_mean, GRMDC_sd)
-GR_FDR_N   = apply(GR_Dat, 1, MDC_FDR_by_normal_distr)
-GR_FDR     = apply(cbind(yfold, GlobalyRandomMDC), 1, MDC_FDR)
-
-
-# Save only gene-permutation randoms if sample perms are skipped
-if (!USE_SAMPLE_PERMS) {
-  xfinal <- cbind(module = modulenames, GlobalyRandomMDC)
-  colnames(xfinal) <- c("module", sprintf("MDC_random_genes_%d", seq_len(ncol(GlobalyRandomMDC))))
-  write.table(xfinal, flog, sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
-
-  mdcFDR <- rep(NA_real_, length(yfold))
-  comFDR <- GR_FDR
-}
-
-
-final = cbind(modulenames, round(yfold, 2),
-              signif(comFDR, 4),
-              signif(if (exists("mdcFDR")) mdcFDR else NA_real_, 4),
-              signif(GR_FDR, 4))
-colnames(final) = c("module", "MDC", "FDR", "FDR_random_samples", "FDR_random_genes")
-
-
-# xfinal = cbind(modulenames, meanFoldChange, GlobalyRandomMDC)
-
-# colnames(xfinal) <- c("module", paste("MDC_random_genes_", c(1:no.perms), sep="") )
-
-# write.table(xfinal, flog, sep="\t",quote=FALSE, col.names=T, row.names=FALSE)
-
-#--------------- compute FDR --------------------
-#
-# rmean = apply(meanFoldChange, 1, mean)
-# rsd   = apply(meanFoldChange, 1, sd)
-# mdcDat = cbind(yfold, rmean, rsd)
-# mdcFDR_N = apply(mdcDat, 1, MDC_FDR_by_normal_distr) # FDR by distribution
-
-# mdcFDR = apply(cbind(yfold, meanFoldChange), 1, MDC_FDR)
-
-# comFDR = apply(cbind(GR_FDR, mdcFDR), 1, max)
-
-# final = cbind(modulenames, round(yfold,2),  signif(comFDR,4), signif(mdcFDR,4), signif(GR_FDR,4))
-# colnames(final) = c("module", "MDC",  "FDR", "FDR_random_samples", "FDR_random_genes")
-final
-
-write.table(final, flog2, sep="\t",quote=FALSE, col.names=T, row.names=FALSE)
+# Four validations
+# write_validation_outputs("genes_p50",  perm_res_Genes50)
+write_validation_outputs("both_p50",   perm_res50)
+# write_validation_outputs("genes_p100", perm_res_Genes100)
+write_validation_outputs("both_p100",  perm_res100)
 
 
 #################################################################################
-#---------------------- plot ratio of means -----------------------------------
-#
-rylab = paste("MDC: k_", shortnames[1]," / k_", shortnames[2], sep="")
-
-imgwid=1400; imghei=600;
-ignore_small_modules=F; module_sizecut=100
-
-hlines = c(2,1.5,1)
-if (max(yfold)>20){ hlines = c(20, 10, 5) }
-
-rylab = paste("MDC(", shortnames[1],", ", shortnames[2], ")", sep="")
-od = order(-yfold)
-dispDat = cbind(yfold[od]); dispNames=modulenames[od];
-rownames(dispDat) <- dispNames; dispModuleSize = modtb[od]
-dispSign = ifelse(comFDR[od]<= 0.10, "*", "")
-
-yymax = closest_integer_bound(max(yfold))
-barplot_by_oneGroup(datMatrix=dispDat, maskMatrix=cbind(dispSign), 
-                    rowcol=col.names[1:length(dispNames)], vlines=hlines,
-                    title="", #"Modular Differential Connectivity", 
-                    ylab=rylab, 
-                    imgfile=fimgRt, imgwid=2000, imghei=800, 
-                    mcex=0.5, xlab_cex=0.65, xaxisLabel_rotate=45, 
-                    legendcols=1, legendxDelta=0, legendCex=1, 
-                    ipointsize=12, iunits="px", ires=300, icompression="lzw",
-                    show_value=FALSE, showLegend=FALSE, show_xaxisLabel=TRUE, show_mask=TRUE,
-                    xmargin=3, ymargin=5, zmargin=0.5, xlabel_orientation=0, ValueXdelta=0, 
-                    ValueYdelta=2*yymax/100, valuecex=1, yMAX=yymax, yMIN=0)
+# Per-validation barplots are generated above; removed single-run barplot.
 
 #************************************************************************************
 #
@@ -352,7 +547,13 @@ for (z in c(1:no.modules) ) {
   }
   
   par(mar=c(0.2, 0, 0.2, 0)+0.4)
-  image((heatmaps.list[[z]])^2, xlim=c(0,1), ylim=c(0,1+ydelta), zlim=zrange, axes=F, col=heatmapColor)
+  # image((heatmaps.list[[z]])^2, xlim=c(0,1), ylim=c(0,1+ydelta), zlim=zrange, axes=F, col=heatmapColor)
+  # Compute z-limits from data
+  Mz <- heatmaps.list[[z]]
+  zr <- tryCatch(quantile(Mz[is.finite(Mz)], c(0.02, 0.98), na.rm=TRUE), error=function(e) c(0,1))
+  if (!is.finite(diff(zr)) || diff(zr) <= 0) zr <- range(Mz[is.finite(Mz)], na.rm=TRUE)
+  if (!all(is.finite(zr)) || diff(zr) <= 0) zr <- c(0, 1e-6)
+  image(Mz, xlim=c(0,1), ylim=c(0,1+ydelta), zlim=zr, axes=F, col=heatmapColor)
   gradient.rect(0,1.05,1,1+ydelta,col=col.names[modulenames[z]],border=F)
   
   # font size
@@ -381,6 +582,7 @@ if(z%%subfigs>0) {
   
   par(mar=c(0, 0, 0, 0),cex=1)
   image(scalesM, xlim=c(-0.05,1.05), ylim=c(-ydel,1+1), zlim=zrange, axes=F, col=heatmapColor)
+
   # draw axis and ticks
   linecol = "brown"; ypos = -ydel/8; tickhei=ydel/4
   lines(x=c(0,1),y=c(ypos, ypos), col=linecol, lwd=1)
@@ -405,8 +607,13 @@ for (z in c(1:no.modules) ) {
   openImgDev(imgHeatMap, iwidth =yywid, iheight =yywid)
   par(mfrow=c(1,1), mar=c(0, 0, 0, 0),cex=1)
   
-  image((heatmaps.list[[z]])^2, xlim=c(0,1), ylim=c(0,1), zlim=zrange, axes=F, col=heatmapColor)
-  
+  # image((heatmaps.list[[z]])^2, xlim=c(0,1), ylim=c(0,1), zlim=zrange, axes=F, col=heatmapColor)
+  Mz <- heatmaps.list[[z]]
+  zr <- tryCatch(quantile(Mz[is.finite(Mz)], c(0.02, 0.98), na.rm=TRUE), error=function(e) c(0,1))
+  if (!is.finite(diff(zr)) || diff(zr) <= 0) zr <- range(Mz[is.finite(Mz)], na.rm=TRUE)
+  if (!all(is.finite(zr)) || diff(zr) <= 0) zr <- c(0, 1e-6)
+  image(Mz, xlim=c(0,1), ylim=c(0,1), zlim=zr, axes=F, col=heatmapColor)
+
   par(mfrow=c(1,1), mar=c(5, 4, 4, 2) + 0.1)
   dev.off();
 }
