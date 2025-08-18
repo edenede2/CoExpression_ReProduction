@@ -388,7 +388,6 @@ for (x in seq_len(no.modules)) {
     meanPermodule[x, ] <- c(NA_real_, NA_real_)
     next
   }
-  # A = old, B = young (keep the order consistent with shortnames)
   A <- datExpr [idx, idx, drop = FALSE]
   B <- datExpr2[idx, idx, drop = FALSE]
   meanPermodule[x, 2] <- lower_mean(A)  # old

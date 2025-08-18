@@ -677,14 +677,11 @@ XWGCNA_Clusters_autoBeta <- function(
     CT_power = 3,
     cor_method = "pearson",
     TOMType = "unsigned",
-    # clustering / reporting
     minClusterSize = 30,
     cluster_type_thr = 0.95,
-    # IO / UX
     out_prefix = "xwgcna",
     save_intermediates = TRUE,
     plot_heatmap = FALSE,
-    # NEW: auto beta
     auto_beta = TRUE,
     targetR2 = 0.80,
     beta_grid = c(1:10, seq(12, 20, 2)),
