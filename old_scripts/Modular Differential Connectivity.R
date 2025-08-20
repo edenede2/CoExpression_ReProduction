@@ -23,6 +23,8 @@
 ################################################################################################
 #memory.limit(size = 35000)
 rm(list = ls())
+source("/Users/edeneldar/CoExpression_ReProduction/old_scripts/R-functions_MDC.R")
+
 library(lattice) # require is design for use inside functions 
 library(plotrix)
 #library(sma) # this is needed for plot.mat below
@@ -38,7 +40,6 @@ shortnames        = c("young", "old")
 corrlpower        = 6
 
 # MDC powers for expression-based MDC computation (sample permutations only)
-# Apply TS (within-tissue) pairs with power 3 and CT (cross-tissue) pairs with power 6
 if (!exists("MDC_TS_POWER")) MDC_TS_POWER <- 3
 if (!exists("MDC_CT_POWER")) MDC_CT_POWER <- 6
 
@@ -122,8 +123,6 @@ validateMDC <- function(no_perms = NO_PERMS,
                         permute_genes = PERMUTE_GENES,
                         permute_samples = PERMUTE_SAMPLES,
                         get_pVal = NULL) {
-  # Dependencies: uses datExpr, datExpr2, modtb, no.genes, no.modules, yfold from parent env
-  # Returns: list(random_genes, random_samples, p_values)
 
   # Sanity checks
   if (!exists("datExpr") || !exists("datExpr2")) stop("datExpr/datExpr2 not found. Load adjacency matrices first.")
@@ -143,25 +142,88 @@ validateMDC <- function(no_perms = NO_PERMS,
 
   # Gene-label permutations: sample random gene sets matching each module size
   if (isTRUE(permute_genes)) {
+    random_genes <- NULL
     for (i in seq_len(no_perms)) {
       if (i %% 5 == 0) {
         print(paste("********* random genes", i, " ........"))
       }
+
+      GRmeanPermodule <- matrix(0, nrow = length(modtb), ncol = 2)
+
       for (x in seq_along(modtb)) {
         k <- as.integer(modtb[x])
-        if (is.na(k) || k < 2) {
-          random_genes[x, i] <- NA_real_
-          next
-        }
-        xsel <- sample.int(no.genes, k, replace = FALSE)
-        A <- datExpr [xsel, xsel, drop = FALSE]  # old
-        B <- datExpr2[xsel, xsel, drop = FALSE]  # young
-        # Ratio consistent with yfold definition below (young/old)
-        random_genes[x, i] <- lower_mean_local(B) / lower_mean_local(A)
+
+        xsel <- sample(c(1:no.genes), k, replace = FALSE)
+
+        A <- datExpr [xsel, xsel, drop = FALSE]
+        B <- datExpr2[xsel, xsel, drop = FALSE]
+
+        diag(A) <- 0
+        diag(B) <- 0
+
+        # links  <- apply(abs(A), 1, sum, na.rm = TRUE)
+        # links2 <- apply(abs(B), 1, sum, na.rm = TRUE)
+
+        # lower-tri לפי A (כמו בקוד הראשון)
+        lpanel   <- lower.tri(A)
+
+        corA <- abs(A[lpanel]); corA <- corA[!is.na(corA)]
+        corB <- abs(B[lpanel]); corB <- corB[!is.na(corB)]
+
+        GRmeanPermodule[x,2] <- mean(corA, na.rm = TRUE)  # old
+        GRmeanPermodule[x,1] <- mean(corB, na.rm = TRUE)  # young
       }
+        # corhelp  <- abs(A[lpanel])
+        # corhelp  <- corhelp[!is.na(corhelp)]
+
+        # corhelp2 <- abs(B[lpanel])
+        # corhelp2 <- corhelp2[!is.na(corhelp2)]
+
+        # # ממוצעי lower-tri בכל רשת
+        # GRmeanPermodule[x, 2] <- mean(corhelp,  na.rm = TRUE)  # old
+        # GRmeanPermodule[x, 1] <- mean(corhelp2, na.rm = TRUE)  # young
+
+        # rm(corhelp, corhelp2)
+        # collect_garbage()
+      # }
+
+      random_genes <- cbind(random_genes, GRmeanPermodule[,1] / GRmeanPermodule[,2])
       collect_garbage()
     }
   }
+#     for (i in seq_len(no.perms)) {
+#       if (i %% 5 == 0) {
+#         print(paste("********* random genes", i, " ........"))
+#       }
+#       for (x in seq_along(modtb)) {
+#         k <- as.integer(modtb[x])
+# #        if (is.na(k) || k < 2) {
+# #          random_genes[x, i] <- NA_real_
+# #          next
+# #        }
+#         xsel <- sample.int(no.genes, k, replace = FALSE)
+#         A <- datExpr [xsel, xsel, drop = FALSE]  # old
+#         B <- datExpr2[xsel, xsel, drop = FALSE]  # young
+#         # Ratio consistent with yfold definition below (young/old)
+#         # random_genes[x, i] <- lower_mean_local(B) / lower_mean_local(A)
+#         # Manual calculating the ratio
+#         diag(A) <- 0
+#         diag(B) <- 0
+#         links <- apply(abs(A), 1, sum, na.rm = TRUE)
+#         links2 <- apply(abs(B), 1, sum, na.rm = TRUE)
+
+#         lpanel <- lower.tri(A)
+#         corhelp <- abs(A[lpanel])
+#         corhelp <- corhelp[!is.na(corhelp)]
+
+#         corhelp2 <- abs(B[lpanel])
+#         corhelp2 <- corhelp2[!is.na(corhelp2)]
+
+#         random_genes[x, i] <- mean(corhelp2, na.rm = TRUE) / mean(corhelp, na.rm = TRUE)
+#       }
+#       collect_garbage()
+#     }
+#   }
 
   # Sample-label permutations using raw expression matrices (if available)
   if (isTRUE(permute_samples)) {
@@ -269,6 +331,19 @@ validateMDC <- function(no_perms = NO_PERMS,
 
   list(random_genes = random_genes, random_samples = random_samples, p_values = p_values, p_values_samples = p_values_samples)
 }
+
+# Empirical FDR for MDC given observed value followed by permutations.
+# Interprets higher MDC as more connected in young (upper-tail test).
+# Input: numeric vector c(observed, perm_1, perm_2, ...)
+# Output: scalar FDR in [0,1]
+# MDC_FDR <- function(x) {
+#   if (is.null(x) || length(x) < 2) return(NA_real_)
+#   obs <- x[1]
+#   perms <- x[-1]
+#   perms <- perms[is.finite(perms)]
+#   if (!is.finite(obs) || length(perms) == 0) return(NA_real_)
+#   (1 + sum(perms >= obs)) / (length(perms) + 1)
+# }
 #
 # -----------------------------End of Parameters to be changed --------------------------------------
 
@@ -390,10 +465,9 @@ for (x in seq_len(no.modules)) {
   }
   A <- datExpr [idx, idx, drop = FALSE]
   B <- datExpr2[idx, idx, drop = FALSE]
-  meanPermodule[x, 2] <- lower_mean(A)  # old
-  meanPermodule[x, 1] <- lower_mean(B)  # young
+  meanPermodule[x, 2] <- lower_mean(A) 
+  meanPermodule[x, 1] <- lower_mean(B)  
 
-  # heatmap tile: upper=young (B), lower=old (A)
   AU <- abs(B); diag(AU) <- 0
   AL <- abs(A); diag(AL) <- 0
   ord <- order(rowSums(AU, na.rm = TRUE), decreasing = TRUE)
@@ -407,7 +481,8 @@ for (x in seq_len(no.modules)) {
 }
 
 yfold <- meanPermodule[, 1] / meanPermodule[, 2]
-
+# Keep full precision for calculations; we'll round for display in outputs
+# (User asked to show MDC rounded to one decimal in result tables)
 USE_SAMPLE_PERMS <- PERMUTE_SAMPLES
 
 
@@ -421,22 +496,25 @@ USE_SAMPLE_PERMS <- PERMUTE_SAMPLES
 # perm_res_Genes100 <- validateMDC(no_perms = 100,
 #                         permute_genes = PERMUTE_GENES,
 #                         permute_samples = FALSE)
-
-perm_res50 <- validateMDC(no_perms = 50,
+set.seed(12345)
+perm_res500 <- validateMDC(no_perms = 500,
                         permute_genes = PERMUTE_GENES,
                         permute_samples = TRUE)
 
-perm_res100 <- validateMDC(no_perms = 100,
+perm_res1000 <- validateMDC(no_perms = 1000,
                         permute_genes = PERMUTE_GENES,
                         permute_samples = TRUE)
+# perm_res100 <- validateMDC(no_perms = 100,
+#                         permute_genes = PERMUTE_GENES,
+#                         permute_samples = TRUE)
 
 # GlobalyRandomMDC_genes50 <- perm_res_Genes50$random_genes
 # GlobalyRandomMDC_genes100 <- perm_res_Genes100$random_genes
 
-GlobalyRandomMDC_genes50 <- perm_res50$random_genes
-GlobalyRandomMDC_genes100 <- perm_res100$random_genes
-SampleRandomMDC_50 <- perm_res50$random_samples
-SampleRandomMDC_100 <- perm_res100$random_samples
+GlobalyRandomMDC_genes500 <- perm_res500$random_genes
+GlobalyRandomMDC_genes1000 <- perm_res1000$random_genes
+SampleRandomMDC_500 <- perm_res500$random_samples
+SampleRandomMDC_1000 <- perm_res1000$random_samples
 
 # Helper to write outputs for a single validation
 write_validation_outputs <- function(run_tag, perm_res_obj) {
@@ -445,14 +523,29 @@ write_validation_outputs <- function(run_tag, perm_res_obj) {
 
   # FDRs per family
   if (!is.null(RG)) {
+    message("Length of random genes: ", length(RG))
+    message("Length of yfold: ", length(yfold))
+    message("Amount of random genes: ", length(RG[1, ]))
     GR_FDR <- apply(cbind(yfold, RG), 1, MDC_FDR)
+  # Normal-approx FDRs per legacy script
+  GRMDC_mean <- rowMeans(RG, na.rm = TRUE)
+  GRMDC_sd <- apply(RG, 1, stats::sd, na.rm = TRUE)
+  GR_Dat <- cbind(yfold, GRMDC_mean, GRMDC_sd)
+  GR_FDR_N <- apply(GR_Dat, 1, MDC_FDR_by_normal_distr)
   } else {
     GR_FDR <- rep(NA_real_, length(yfold))
+  GR_FDR_N <- rep(NA_real_, length(yfold))
   }
   if (!is.null(RS)) {
     mdcFDR <- apply(cbind(yfold, RS), 1, MDC_FDR)
+  # Normal-approx FDRs per legacy script
+  rmean <- rowMeans(RS, na.rm = TRUE)
+  rsd <- apply(RS, 1, stats::sd, na.rm = TRUE)
+  mdcDat <- cbind(yfold, rmean, rsd)
+  mdcFDR_N <- apply(mdcDat, 1, MDC_FDR_by_normal_distr)
   } else {
     mdcFDR <- rep(NA_real_, length(yfold))
+  mdcFDR_N <- rep(NA_real_, length(yfold))
   }
   comFDR <- pmax(GR_FDR, mdcFDR, na.rm = TRUE)
   comFDR[!is.finite(comFDR)] <- NA_real_
@@ -472,15 +565,25 @@ write_validation_outputs <- function(run_tag, perm_res_obj) {
   }
 
   # Final table
-  final <- cbind(modulenames, round(yfold, 4),
+  final <- cbind(modulenames, round(yfold, 2),
                  signif(comFDR, 4),
                  signif(mdcFDR, 4),
                  signif(GR_FDR, 4),
+                 signif(mdcFDR_N, 4),
+                 signif(GR_FDR_N, 4),
                  signif(if (!is.null(perm_res_obj$p_values)) perm_res_obj$p_values else NA_real_, 4),
                  signif(if (!is.null(perm_res_obj$p_values_samples)) perm_res_obj$p_values_samples else NA_real_, 4))
-  colnames(final) <- c("module", "MDC", "FDR", "FDR_random_samples", "FDR_random_genes", "p_empirical_genes", "p_empirical_samples")
+  colnames(final) <- c("module",
+                       "MDC",
+                       "FDR",
+                       "FDR_random_samples",
+                       "FDR_random_genes",
+                       "FDR_normal_random_samples",
+                       "FDR_normal_random_genes",
+                       "p_empirical_genes",
+                       "p_empirical_samples")
 
-  flog2_run <- paste(outputDir1, fname, "_", run_tag, "_wFDR", ".xls", sep='')
+  flog2_run <- paste(outputDir1, fname, "_", run_tag, "_wFDR2", ".xls", sep='')
   write.table(final, flog2_run, sep = "\t", quote = FALSE, col.names = TRUE, row.names = FALSE)
 
   # Per-run barplot
@@ -503,9 +606,9 @@ write_validation_outputs <- function(run_tag, perm_res_obj) {
 
 # Four validations
 # write_validation_outputs("genes_p50",  perm_res_Genes50)
-write_validation_outputs("both_p50",   perm_res50)
-# write_validation_outputs("genes_p100", perm_res_Genes100)
-write_validation_outputs("both_p100",  perm_res100)
+write_validation_outputs("both_p500",   perm_res500)
+write_validation_outputs("genes_p1000", perm_res_Genes1000)
+# write_validation_outputs("both_p100",  perm_res100)
 
 
 #################################################################################

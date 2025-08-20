@@ -413,7 +413,7 @@ Clusters_Table <- function(TOM_mat, minClusterSize = 30, plot_heatmap = FALSE) {
   if (is.null(gene_names)) gene_names <- rownames(TOM_mat)
   
   dist_TOM_mat <- 1 - TOM_mat
-  rm(TOM_mat); gc()
+  # rm(TOM_mat); gc()
   h_TOM <- hclust(as.dist(dist_TOM_mat), method = "average")
   
   sizeGrWindow(12,9)
@@ -422,8 +422,9 @@ Clusters_Table <- function(TOM_mat, minClusterSize = 30, plot_heatmap = FALSE) {
   
   dynamicMods   <- cutreeDynamic(h_TOM, method = "tree", deepSplit = TRUE, minClusterSize = minClusterSize)
   dynamicColors <- labels2colors(dynamicMods)
-  
   restGenes <- (dynamicColors != "grey")
+  message("Plot heatmap", sum(restGenes))
+
   if (plot_heatmap && sum(restGenes) <= 5000) {
     network_heatmap(restGenes, dynamicColors)
   }
