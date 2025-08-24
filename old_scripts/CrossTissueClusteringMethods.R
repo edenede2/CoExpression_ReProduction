@@ -27,9 +27,7 @@ suppressMessages(WGCNA::allowWGCNAThreads())  # multi-thread WGCNA when availabl
 LoadExprData<-function(tissue_name, tissue_file_name, 
                        # MV_sd_thr
                        sd_quantile = 0.90,
-                       max_genes_per_tissue = 4000,
-                       min_expr = 0,
-                       min_prop = 0.10
+                       max_genes_per_tissue = 4000
                        ) {
   
   if (grepl("\\.RData$", tissue_file_name)){
@@ -103,8 +101,7 @@ AdjacencyFromExpr <- function(
     mat <- LoadExprData(
       tissue_names[i], tissue_expr_file_names[i],
       sd_quantile = sd_quantile,
-      max_genes_per_tissue = max_genes_per_tissue,
-      min_expr = min_expr, min_prop = min_prop
+      max_genes_per_tissue = max_genes_per_tissue
     )
     
     if (ncol(mat) == 0) {
@@ -850,7 +847,6 @@ R2_connectivity <- function(adj_mat) {
 XWGCNA_Clusters <- function(
     tissue_names = NULL,
     tissue_expr_file_names = NULL,
-    # filtering knobs forwarded to AdjacencyFromExpr -> LoadExprData
     sd_quantile = 0.90,
     max_genes_per_tissue = 4000,
     min_expr = 0,
@@ -958,6 +954,50 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
   datout
 }
 
+R2_connectivity <- function(adj_mat) {
+  #--------------------------For scale Free-----------------------------
+  k <- rowSums(adj_mat)
+  r2 <- checkScaleFree(k)$Rsquared.SFT
+  r2_conn <- list(r2=r2, mean_conn=mean(k), median_conn=median(k), max_conn=max(k), min_conn=min(k))
+  
+  #------------------For connectons-----------------------
+  tissue_indexed <- c(0, as.numeric(table(unlist(lapply(strsplit(colnames(adj_mat), split = '_'), function(x) {return(x[1])})))))
+  for(i in 2:length(tissue_indexed)) tissue_indexed[i] <- tissue_indexed[i] <- sum(tissue_indexed[i:(i-1)])
+  
+  TS_conn_mat <- matrix(NA, nrow=(length(tissue_indexed)-1), ncol=4)
+  colnames(TS_conn_mat) <- c('mean', 'median', 'max', 'min')
+  
+  CT_conn_mat <- matrix(NA, nrow=((((length(tissue_indexed)-1)*(length(tissue_indexed)-1))-(length(tissue_indexed)-1))/2), ncol=4)
+  colnames(CT_conn_mat) <- c('mean', 'median', 'max', 'min')
+  CT_counter <- 1
+  
+  for(i in 1:(length(tissue_indexed)-1)) {
+    temp_adj_mat <- adj_mat[(tissue_indexed[i]+1):tissue_indexed[i+1], (tissue_indexed[i]+1):tissue_indexed[i+1]]
+    k <- rowSums(temp_adj_mat)
+    TS_conn_mat[i, ] <- c(mean(k), median(k), max(k), min(k))
+    
+    if(i < length(tissue_indexed)-1) {
+      for(j in 1:(length(tissue_indexed)-1-i)) {
+        temp_adj_mat <- adj_mat[(tissue_indexed[i]+1):tissue_indexed[i+1], (tissue_indexed[i+j]+1):tissue_indexed[i+j+1]]
+        k <- rowSums(temp_adj_mat)
+        CT_conn_mat[CT_counter, ] <- c(mean(k), median(k), max(k), min(k))
+        CT_counter <- CT_counter + 1
+      }
+    }
+    
+  }
+  
+  
+  scale_free_conn_list <- list(r2_conn=r2_conn, TS_conn_mat=TS_conn_mat, CT_conn_mat=CT_conn_mat)
+  # save(scale_free_conn_list, file='Scale_free_conn_list.RData')
+  
+  
+  R2_Conn <- list(r2=r2_conn$r2, mean_conn=r2_conn$mean_conn, TS_mean_conn=paste(TS_conn_mat [ ,'mean'], collapse = ', '), mean_TS_mean_conn=mean(TS_conn_mat [ ,'mean']),
+                  max_TS_mean_conn=max(TS_conn_mat [ ,'mean']), min_TS_mean_conn=min(TS_conn_mat [ ,'mean']), CT_mean_conn=paste(CT_conn_mat[ ,'mean'], collapse = ', '),
+                  mean_CT_mean_conn=mean(CT_conn_mat[ ,'mean']), max_CT_mean_conn=max(CT_conn_mat[ ,'mean']), min_CT_mean_conn=min(CT_conn_mat[ ,'mean']))
+  
+  return(R2_Conn)
+}
 
 # ------------------ Auto-pick beta (TS/CT) ------------------
 .choose_power_from_pickSoft <- function(sft, targetR2 = 0.80) {
@@ -1021,9 +1061,7 @@ auto_pick_powers <- function(
       tissue_name = tissue_names[i],
       tissue_file_name = tissue_expr_file_names[i],
       sd_quantile = sd_quantile,
-      max_genes_per_tissue = max_genes_per_tissue,
-      min_expr = min_expr,
-      min_prop = min_prop
+      max_genes_per_tissue = max_genes_per_tissue
     )
     expr_list[[i]]   <- X
     donors_list[[i]] <- .aggregate_by_donor(X)
