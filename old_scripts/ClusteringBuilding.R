@@ -89,6 +89,7 @@ R2_connectivity <- function(adj_mat) {
   
   return(R2_Conn)
 }
+
 LoadExprData<-function(tissue_name, tissue_file_name, 
                        sd_quantile = 0.00,
                        max_genes_per_tissue = 5000
@@ -387,7 +388,6 @@ filter_plot_inputs_topVar <- function(
   if (length(dynamicColors) != ncol(TOM_mat))
     stop("dynamicColors length must equal ncol(TOM_mat).")
 
-  # 1) איסוף שונות לכל הגנים (עם prefix של הרקמה)
   all_vars <- numeric(0)
   for (i in seq_along(tissue_names)) {
     X <- LoadExprData(
@@ -397,16 +397,15 @@ filter_plot_inputs_topVar <- function(
       max_genes_per_tissue = max_genes_per_tissue
     )
     if (aggregate_by_donor) {
-      X <- .aggregate_by_donor(X)  # מיצוע דגומים כפולים לתורם
+      X <- .aggregate_by_donor(X)  
     }
     v <- apply(X, 2, stats::var, na.rm = TRUE)
-    names(v) <- colnames(X)        # כבר בפורמט "Tissue_Gene"
+    names(v) <- colnames(X)       
     all_vars <- c(all_vars, v)
   }
   all_vars <- all_vars[is.finite(all_vars)]
   if (!length(all_vars)) stop("No genes found for variance ranking.")
 
-  # 2) בחירת שמות ה-Top-n והצלבה מול ה-TOM
   ord <- order(all_vars, decreasing = TRUE)
   top_names <- names(all_vars)[ord[seq_len(min(n_top, length(ord)))]]
   keep_names <- intersect(colnames(TOM_mat), top_names)
@@ -415,11 +414,9 @@ filter_plot_inputs_topVar <- function(
   if (length(keep_idx) < 4L)
     warning("Fewer than 4 genes kept — plots may not render well.")
 
-  # 3) תתי-מטריצות לפלוטים
   TOM_sub <- TOM_mat[keep_idx, keep_idx, drop = FALSE]
   colors_sub <- dynamicColors[keep_idx]
 
-  # החזרה לשימוש ישיר בפונקציות הפלוטינג
   invisible(list(
     TOM_mat      = TOM_sub,
     dynamicColors= colors_sub,
