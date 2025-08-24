@@ -295,7 +295,7 @@ network_heatmap_WGCNA <- function(
   diss <- 1 - subTOM
   hc <- hclust(as.dist(diss), method = "average")
 
-  plotTOM <- diss^tom_power
+  plotTOM <- diss
   diag(plotTOM) <- NA
 
   png(out_file, width = 1200, height = 1200, res = 140)
@@ -662,7 +662,7 @@ auto_pick_powers <- function(
   beta_grid = c(1:10, seq(12, 20, 2)),
   targetR2 = 0.80,
   unsigned        = TRUE,
-  nBreaks         = 10,
+  nBreaks         = 50,
   removeFirst     = FALSE,
   use_signed_R2_TS = FALSE,
   use_signed_R2_CT = FALSE
@@ -732,7 +732,7 @@ auto_pick_powers <- function(
         pair_id <- paste(tissue_names[i], tissue_names[j], sep = "||")
 
         if (length(common) < 3) {
-          message(sprintf("[CT beta pick] %s: |common donors|=%d → skip", pair_id, length(common)))
+          message(sprintf("[CT beta pick] %s: |common donors|=%s → skip", pair_id, length(common)))
           next
         }
         Mi <- donors_list[[i]][common, , drop = FALSE]
@@ -755,7 +755,7 @@ auto_pick_powers <- function(
           best_beta <- .choose_power_from_pickSoft(sft_ct, targetR2 = targetR2)
           CT_betas <- c(CT_betas, best_beta)
           CT_power_map[pair_id] <- best_beta
-          message(sprintf("[CT beta pick] %s: beta=%d", pair_id, best_beta))
+          message(sprintf("[CT beta pick] %s: beta=%s", pair_id, best_beta))
 
           fi <- sft_ct$fitIndices
           CT_fit_list[[length(CT_fit_list) + 1]] <- data.frame(
@@ -879,6 +879,313 @@ plot_beta_curves_per_tissue <- function(
 
   return(plots)
 }
+
+# =========================
+# WGCNA-based β (soft-threshold) pickers for TS & CT
+# Drop-in additions that mirror the STARNET script logic while
+# fitting into your existing XWGCNA_* pipeline.
+#
+# Key points:
+# - Uses WGCNA::pickSoftThreshold() **on expression matrices** (not adjacency),
+#   exactly like the STARNET snippet.
+# - Chooses the **lowest β** whose scale-free fit R^2 crosses a target (default 0.80);
+#   otherwise takes the β with maximal R^2.
+# - Returns the same structures your current `auto_pick_powers()` returns,
+#   so you can swap methods with a single flag.
+# - Respects your existing helpers: LoadExprData(), .aggregate_by_donor(), .extract_donor().
+# - Preserves the original STARNET parameter style: power vector seq(0.5, 20, length.out = 20),
+#   verbose = 5, networkType derived from TOMType.
+#
+# Suggested wiring:
+# - Add parameter `beta_method = c("custom", "wgcna")` to XWGCNA_Clusters_autoBeta().
+# - When auto_beta && beta_method == "wgcna", call `wgcna_auto_pick_powers()` below.
+# - Everything else in your pipeline (AdjacencyFromExpr, TOM, clustering, plots)
+#   can remain unchanged.
+# =========================
+
+suppressMessages(WGCNA::allowWGCNAThreads())
+
+.networkType_from_TOMType <- function(TOMType) {
+  tt <- tolower(TOMType %||% "unsigned")
+  if (startsWith(tt, "signed")) {
+    if (grepl("hybrid", tt)) return("signed hybrid")
+    return("signed")
+  }
+  "unsigned"
+}
+
+`%||%` <- function(a, b) if (!is.null(a)) a else b
+
+# --------------------------- chooser ---------------------------
+.wgcna_choose_beta_min_above <- function(sft, targetR2 = 0.80, require_neg_slope = TRUE) {
+  stopifnot(!is.null(sft), !is.null(sft$fitIndices))
+  df <- sft$fitIndices
+  if (!all(c("Power","SFT.R.sq") %in% names(df))) return(NA_integer_)
+  ok <- !is.na(df$SFT.R.sq) & (df$SFT.R.sq >= targetR2)
+  if (require_neg_slope && "slope" %in% names(df)) ok <- ok & (df$slope < 0)
+  if (any(ok)) {
+    return(as.integer(min(df$Power[ok])))
+  }
+  # fallback: argmax R^2
+  i <- which.max(df$SFT.R.sq)
+  as.integer(df$Power[i])
+}
+
+# --------------------------- TS picker ---------------------------
+wgcna_pick_TS <- function(expr_mat,
+                          powerVector = seq(0.5, 20, length.out = 20),
+                          TOMType = "unsigned",
+                          cor_method = "pearson",
+                          verbose = 5,
+                          targetR2 = 0.80,
+                          require_neg_slope = TRUE,
+                          ...) {
+  stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
+  # WGCNA expects samples x genes
+  # LoadExprData() already returns samples as rows, genes as columns -> OK
+  corFnc <- if (tolower(cor_method) == "pearson") "cor" else "bicor"
+  corOptions <- if (identical(corFnc, "cor"))
+    list(use = "pairwise.complete.obs")
+  else
+    list(use = "pairwise.complete.obs", maxPOutliers = 1, robustY = FALSE)
+
+  sft <- WGCNA::pickSoftThreshold(
+    data = expr_mat,
+    powerVector = powerVector,
+    networkType = .networkType_from_TOMType(TOMType),
+    corFnc = corFnc,
+    corOptions = corOptions,
+    verbose = verbose,
+    ...
+  )
+
+  chosen <- .wgcna_choose_beta_min_above(sft, targetR2 = targetR2,
+                                         require_neg_slope = require_neg_slope)
+  # Ensure a tidy fitIndices like your plotter expects
+  fi <- sft$fitIndices
+  if (!"SFT.R.sq" %in% names(fi) && "SFT.R.sq" %in% names(sft)) fi$SFT.R.sq <- sft$SFT.R.sq
+  list(beta = chosen, sft = sft, fit_df = fi)
+}
+
+# --------------------------- CT picker ---------------------------
+# Builds a paired expression matrix (samples-in-common x [genes_A | genes_B])
+# and runs WGCNA::pickSoftThreshold() on it, exactly like the STARNET snippet.
+wgcna_pick_CT <- function(expr_A, expr_B,
+                          aggregate_by_donor = FALSE,
+                          powerVector = seq(0.5, 20, length.out = 20),
+                          TOMType = "unsigned",
+                          cor_method = "pearson",
+                          verbose = 5,
+                          targetR2 = 0.80,
+                          require_neg_slope = TRUE,
+                          min_common = 3L,
+                          ...) {
+  stopifnot(is.matrix(expr_A) || is.data.frame(expr_A))
+  stopifnot(is.matrix(expr_B) || is.data.frame(expr_B))
+
+  X_A <- expr_A; X_B <- expr_B
+  if (aggregate_by_donor) {
+    X_A <- .aggregate_by_donor(X_A)
+    X_B <- .aggregate_by_donor(X_B)
+  }
+
+  common <- intersect(rownames(X_A), rownames(X_B))
+  if (length(common) < min_common)
+    return(list(beta = NA_integer_, sft = NULL,
+                fit_df = data.frame(Power = powerVector, SFT.R.sq = NA_real_)))
+
+  paired <- cbind(X_A[common, , drop = FALSE], X_B[common, , drop = FALSE])
+
+  corFnc <- if (tolower(cor_method) == "pearson") "cor" else "bicor"
+  corOptions <- if (identical(corFnc, "cor"))
+    list(use = "pairwise.complete.obs")
+  else
+    list(use = "pairwise.complete.obs", maxPOutliers = 1, robustY = FALSE)
+
+  sft <- WGCNA::pickSoftThreshold(
+    data = paired,
+    powerVector = powerVector,
+    networkType = .networkType_from_TOMType(TOMType),
+    corFnc = corFnc,
+    corOptions = corOptions,
+    verbose = verbose,
+    ...
+  )
+  chosen <- .wgcna_choose_beta_min_above(sft, targetR2 = targetR2,
+                                         require_neg_slope = require_neg_slope)
+  fi <- sft$fitIndices
+  if (!"SFT.R.sq" %in% names(fi) && "SFT.R.sq" %in% names(sft)) fi$SFT.R.sq <- sft$SFT.R.sq
+  list(beta = chosen, sft = sft, fit_df = fi)
+}
+
+# --------------------------- Auto picker (TS & CT) ---------------------------
+# Mirrors your current auto_pick_powers() return shape so you can plug it in.
+wgcna_auto_pick_powers <- function(
+  tissue_names,
+  tissue_expr_file_names,
+  sd_quantile = 0.50,              # STARNET used ~0.5 in the example
+  max_genes_per_tissue = 5000,
+  TOMType = "unsigned",
+  cor_method = "pearson",
+  powerVector = seq(0.5, 20, length.out = 20),
+  targetR2 = 0.80,
+  require_neg_slope = TRUE,
+  verbose = 5,
+  aggregate_by_donor_CT = FALSE,
+  min_common_CT = 3L
+) {
+  stopifnot(length(tissue_names) == length(tissue_expr_file_names))
+  T <- length(tissue_names)
+
+  # Load & prefilter expression per tissue (samples x genes)
+  expr_list <- vector("list", T)
+  names(expr_list) <- tissue_names
+  message("Loading expression data for ", T, " tissues…")
+  for (i in seq_len(T)) {
+    X <- LoadExprData(
+      tissue_name = tissue_names[i],
+      tissue_file_name = tissue_expr_file_names[i],
+      sd_quantile = sd_quantile,
+      max_genes_per_tissue = max_genes_per_tissue
+    )
+    expr_list[[i]] <- X
+  }
+
+  # ---- TS per tissue ----
+  message("Loading expression data for ", T, " tissues…")
+  TS_per_tissue <- integer(T)
+  TS_power_map  <- setNames(integer(T), tissue_names)
+  TS_fit_curves <- vector("list", T)
+
+  for (i in seq_len(T)) {
+    message("Loading expression data for tissue: ", tissue_names[i])
+    ts_fit <- tryCatch(
+      wgcna_pick_TS(
+        expr_mat   = expr_list[[i]],
+        powerVector = powerVector,
+        TOMType     = TOMType,
+        cor_method  = cor_method,
+        verbose     = verbose,
+        targetR2    = targetR2,
+        require_neg_slope = require_neg_slope
+      ), error = function(e) { message("[TS] ", tissue_names[i], ": ", e$message); NULL }
+    )
+    if (!is.null(ts_fit)) {
+      TS_per_tissue[i] <- ts_fit$beta
+      fi <- ts_fit$fit_df
+      fi$tissue <- tissue_names[i]
+      TS_fit_curves[[i]] <- fi
+    } else {
+      TS_per_tissue[i] <- NA_integer_
+      TS_fit_curves[[i]] <- data.frame(Power = powerVector, SFT.R.sq = NA_real_, tissue = tissue_names[i])
+    }
+    TS_power_map[tissue_names[i]] <- TS_per_tissue[i]
+  }
+  message("Loading expression data for ", T, " tissues…")
+  TS_power <- as.integer(stats::median(TS_per_tissue, na.rm = TRUE))
+  TS_fit_curves_df <- do.call(rbind, TS_fit_curves)
+
+  # ---- CT per pair ----
+  CT_betas <- c()
+  CT_power_map <- numeric(0)
+  CT_fit_list <- list()
+
+  if (T >= 2) {
+    for (i in 1:(T - 1)) {
+      message("Processing CT pairs for tissue: ", tissue_names[i])
+      for (j in (i + 1):T) {
+        pair_id <- paste(tissue_names[i], tissue_names[j], sep = "||")
+        ct_fit <- tryCatch(
+          wgcna_pick_CT(
+            expr_A = expr_list[[i]], expr_B = expr_list[[j]],
+            aggregate_by_donor = aggregate_by_donor_CT,
+            powerVector = powerVector,
+            TOMType = TOMType,
+            cor_method = cor_method,
+            verbose = verbose,
+            targetR2 = targetR2,
+            require_neg_slope = require_neg_slope,
+            min_common = min_common_CT
+          ), error = function(e) { message("[CT] ", pair_id, ": ", e$message); NULL }
+        )
+        if (!is.null(ct_fit) && !is.na(ct_fit$beta)) {
+          CT_betas <- c(CT_betas, ct_fit$beta)
+          CT_power_map[pair_id] <- ct_fit$beta
+          CT_fit_list[[length(CT_fit_list) + 1]] <-
+            data.frame(pair = pair_id, Power = ct_fit$fit_df$Power,
+                       Rsquared.SFT = ct_fit$fit_df$SFT.R.sq, stringsAsFactors = FALSE)
+        } else {
+          CT_fit_list[[length(CT_fit_list) + 1]] <-
+            data.frame(pair = pair_id, Power = powerVector, Rsquared.SFT = NA_real_)
+        }
+      }
+    }
+  }
+
+  CT_power <- if (length(CT_betas)) as.integer(stats::median(CT_betas, na.rm = TRUE)) else 3L
+  CT_fit_curves_df <- if (length(CT_fit_list)) do.call(rbind, CT_fit_list) else
+    data.frame(pair = character(), Power = numeric(), Rsquared.SFT = numeric())
+
+  list(
+    method         = "wgcna",
+    TS_power       = TS_power,
+    CT_power       = CT_power,
+    TS_per_tissue  = TS_per_tissue,
+    CT_per_pair    = as.integer(CT_betas),
+    TS_fit_curves  = TS_fit_curves_df,
+    CT_fit_curves  = CT_fit_curves_df,
+    TS_power_map   = TS_power_map,
+    CT_power_map   = CT_power_map
+  )
+}
+
+# =========================
+# Integration hook into your main function
+# =========================
+# In XWGCNA_Clusters_autoBeta(), add parameters:
+#   beta_method = c("custom", "wgcna"),
+#   wgcna_powerVector = seq(0.5, 20, length.out = 20),
+#   aggregate_by_donor_CT = FALSE,
+# and replace the auto-beta block with:
+#
+#   if (auto_beta) {
+#     if (match.arg(beta_method) == "wgcna") {
+#       message("Auto-picking TS/CT betas (WGCNA)…")
+#       beta_info <- wgcna_auto_pick_powers(
+#         tissue_names, tissue_expr_file_names,
+#         sd_quantile = sd_quantile,
+#         max_genes_per_tissue = max_genes_per_tissue,
+#         TOMType = TOMType,
+#         cor_method = cor_method,
+#         powerVector = wgcna_powerVector,
+#         targetR2 = targetR2,
+#         aggregate_by_donor_CT = aggregate_by_donor_CT
+#       )
+#     } else {
+#       message("Auto-picking TS/CT betas (custom)…")
+#       beta_info <- auto_pick_powers(
+#         tissue_names, tissue_expr_file_names,
+#         sd_quantile = sd_quantile,
+#         max_genes_per_tissue = max_genes_per_tissue,
+#         cor_method = cor_method,
+#         beta_grid = beta_grid,
+#         targetR2 = targetR2
+#       )
+#     }
+#     TS_power <- beta_info$TS_power
+#     TS_map   <- beta_info$TS_power_map
+#     CT_power <- beta_info$CT_power
+#     CT_map   <- beta_info$CT_power_map
+#   } else {
+#     TS_map <- setNames(rep.int(TS_power, length(tissue_names)), tissue_names)
+#     CT_map <- .make_CT_map(tissue_names, CT_power)
+#   }
+#
+# Your downstream plotting function `plot_beta_curves_per_tissue()` will
+# work as-is on `beta_info` from either method.
+
+
+
 
 # =============================== kME analysis ===============================
 # ========= Helpers =========
@@ -1167,6 +1474,8 @@ XWGCNA_Clusters_autoBeta <- function(
     auto_beta = TRUE,
     targetR2 = 0.80,
     beta_grid = c(1:10, seq(12, 20, 2)),
+    wgcna_powerVector = seq(0.5, 20, length.out = 20),
+    aggregate_by_donor_CT = FALSE,
     plot_beta_curves = TRUE,
     blockwise_TOM = TRUE,
     TOM_block_size = 2000L,
@@ -1178,6 +1487,19 @@ XWGCNA_Clusters_autoBeta <- function(
     CT_map <- NULL
     beta_info <- NULL
     if (auto_beta) {
+      if (beta_method == "wgcna") {
+        message("Auto-picking TS/CT betas (WGCNA)…")
+        beta_info <- wgcna_auto_pick_powers(
+          tissue_names, tissue_expr_file_names,
+          sd_quantile = sd_quantile,
+          max_genes_per_tissue = max_genes_per_tissue,
+          TOMType = TOMType,
+          cor_method = cor_method,
+          powerVector = wgcna_powerVector,
+          targetR2 = targetR2,
+          aggregate_by_donor_CT = aggregate_by_donor_CT
+        )
+      } else {
         message("Auto-picking TS/CT betas ...")
         beta_info <- auto_pick_powers(
             tissue_names, tissue_expr_file_names,
@@ -1201,6 +1523,7 @@ XWGCNA_Clusters_autoBeta <- function(
             save_png   = TRUE
             )
         }
+      }
     } else {
       message("Using constant β values.")
       TS_map <- setNames(rep.int(TS_power, length(tissue_names)), tissue_names)
