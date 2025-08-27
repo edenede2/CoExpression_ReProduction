@@ -22,6 +22,28 @@ suppressMessages(WGCNA::allowWGCNAThreads())  # multi-thread WGCNA when availabl
   setNames(rep.int(beta, length(keys)), keys)
 }
 
+checkScaleFree_logbin <- function(k, nBreaks = 10, removeFirst = FALSE) {
+  kpos <- k[k > 0]                      
+  br <- unique(10^seq(log10(min(kpos)), log10(max(kpos)), length.out = nBreaks + 1))
+  h  <- hist(kpos, breaks = br, plot = FALSE, right = TRUE)
+
+  dk   <- h$mids                        
+  p.dk <- h$counts / sum(h$counts)
+
+  log.dk  <- log10(dk)
+  if (removeFirst) { log.dk <- log.dk[-1]; p.dk <- p.dk[-1] }
+  log.p   <- log10(p.dk + 1e-9)
+
+  lm1 <- lm(log.p ~ log.dk)
+  lm2 <- lm(log.p ~ log.dk + I(10^log.dk)) 
+
+  data.frame(
+    Rsquared.SFT = summary(lm1)$r.squared,
+    slope.SFT    = coef(lm1)[2],
+    truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared
+  )
+}
+
 checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE) 
 {
   discretized.k = cut(k, nBreaks)
@@ -44,11 +66,255 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
   datout = data.frame(Rsquared.SFT = summary(lm1)$r.squared, slope.SFT = summary(lm1)$coefficients[2, 1], truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared)
   datout
 }
+# ======================= helpers =======================
+.require_or_stop <- function(pkgs) {
+  miss <- pkgs[!vapply(pkgs, requireNamespace, FUN.VALUE = TRUE, quietly = TRUE)]
+  if (length(miss)) stop("Missing packages: ", paste(miss, collapse=", "),
+                         "\nInstall: install.packages(c(", 
+                         paste(sprintf('"%s"', miss), collapse=", "), "))")
+}
+
+.tissue_palette <- function(tissues) {
+  .require_or_stop(c("RColorBrewer"))
+  pal <- RColorBrewer::brewer.pal(9, "Set1")[c(1:5,7:9)]
+  if (length(tissues) <= length(pal)) {
+    setNames(pal[seq_along(tissues)], tissues)
+  } else {
+    setNames(rep(pal, length.out = length(tissues)), tissues)
+  }
+}
+
+.split_pair <- function(x) strsplit(x, "\\|\\|", fixed = FALSE)
+
+.ct_partner <- function(pair, t) {
+  ab <- .split_pair(pair)[[1]]
+  if (length(ab) != 2) return(NA_character_)
+  if (identical(ab[1], t)) ab[2] else if (identical(ab[2], t)) ab[1] else NA_character_
+}
+
+.signed_R2_TS <- function(df) {
+  slope_col <- if ("slope" %in% names(df)) "slope" else if ("slope.SFT" %in% names(df)) "slope.SFT" else NA
+  if (is.na(slope_col)) return(df$SFT.R.sq)
+  -sign(df[[slope_col]]) * df$SFT.R.sq
+}
+
+.signed_R2_CT <- function(df) {
+  r2_col <- if ("Rsquared.SFT" %in% names(df)) "Rsquared.SFT" else if ("SFT.R.sq" %in% names(df)) "SFT.R.sq" else NA
+  slope_col <- if ("slope.SFT" %in% names(df)) "slope.SFT" else if ("slope" %in% names(df)) "slope" else NA
+  if (is.na(r2_col)) return(rep(NA_real_, nrow(df)))
+  if (is.na(slope_col)) return(df[[r2_col]])
+  -sign(df[[slope_col]]) * df[[r2_col]]
+}
+
+# ======================= 1) Beta series per tissue =======================
+plot_beta_series_pdf <- function(beta_info, tissues, out_file = "plots/beta_series.pdf",
+                                 vline_TS = NULL, vline_CT = NULL,
+                                 layout_rows = 4, layout_cols = 2) {
+  dir.create(dirname(out_file), showWarnings = FALSE, recursive = TRUE)
+  cols <- .tissue_palette(tissues)
+
+  ts_df <- beta_info$TS_fit_curves
+  ct_df <- beta_info$CT_fit_curves
+
+  if (!is.null(ct_df) && nrow(ct_df)) {
+    if (!"Power" %in% names(ct_df)) stop("CT_fit_curves must have 'Power'")
+    if (!"pair" %in% names(ct_df)) stop("CT_fit_curves must have 'pair'")
+  }
+
+  pdf(out_file, height = 9, width = 5)
+  on.exit(dev.off(), add = TRUE)
+  par(mfrow = c(layout_rows, layout_cols))
+
+  for (t in tissues) {
+    ts_t <- ts_df[ts_df$tissue == t, , drop = FALSE]
+    if (!nrow(ts_t)) {
+      plot.new(); title(t)
+      next
+    }
+    ts_t$signed_R2 <- .signed_R2_TS(ts_t)
+
+    plot(ts_t$Power, ts_t$signed_R2, type = "l", lwd = 2,
+         ylim = c(0, 1), main = t, xlab = expression(beta), ylab = expression(R^2))
+
+    if (!is.null(ct_df) && nrow(ct_df)) {
+      keep <- grepl(paste0("^", t, "\\|\\|"), ct_df$pair) | grepl(paste0("\\|\\|", t, "$"), ct_df$pair)
+      ct_sub <- ct_df[keep, , drop = FALSE]
+      if (nrow(ct_sub)) {
+        partners <- vapply(ct_sub$pair, .ct_partner, character(1), t = t)
+        ct_sub$signed_R2 <- .signed_R2_CT(ct_sub)
+        split_list <- split(ct_sub, partners)
+        for (p in names(split_list)) {
+          df <- split_list[[p]]
+          lines(df$Power, df$signed_R2, col = cols[[p]], lwd = 1.5)
+        }
+      }
+    }
+    if (!is.null(vline_CT)) abline(v = vline_CT, col = "grey", lty = 2)
+    if (!is.null(vline_TS)) abline(v = vline_TS, col = "grey", lty = 1)
+  }
+
+  # לוח קטלוג צבעים
+  plot(0, 0, type = "n", axes = FALSE, xlab = "", ylab = "")
+  legend("center", legend = tissues, col = cols[tissues], pch = 15, cex = 1.0, ncol = 1, bty = "n")
+}
+
+# ======================= 2) Slope & connectivity summaries =======================
+plot_tissue_summaries_pdf <- function(beta_info, tissues,
+                                      out_file = "plots/beta_series_tissue_summaries.pdf") {
+  dir.create(dirname(out_file), showWarnings = FALSE, recursive = TRUE)
+  cols <- .tissue_palette(tissues)
+  ts_df <- beta_info$TS_fit_curves
+  if (is.null(ts_df) || !nrow(ts_df)) {
+    warning("TS_fit_curves is empty; skipping summaries plot.")
+    return(invisible(NULL))
+  }
+
+  ts_df$signed_R2 <- .signed_R2_TS(ts_df)
+  slope_col <- if ("slope" %in% names(ts_df)) "slope" else if ("slope.SFT" %in% names(ts_df)) "slope.SFT" else NA
+  meank_col <- if ("mean.k" %in% names(ts_df)) "mean.k" else if ("mean.k." %in% names(ts_df)) "mean.k." else NA
+
+  pdf(out_file, height = 16, width = 5)
+  on.exit(dev.off(), add = TRUE)
+  par(mfrow = c(4,1))
+
+  # 1) signed R²
+  yr <- range(ts_df$signed_R2, na.rm = TRUE)
+  i <- 1
+  ts_t <- ts_df[ts_df$tissue == tissues[i], ]
+  plot(ts_t$Power, ts_t$signed_R2, type = "b", pch = 16, col = cols[[tissues[i]]],
+       ylim = yr, xlab = expression(beta), ylab = expression(R^2))
+  if (length(tissues) > 1) {
+    for (i in 2:length(tissues)) {
+      ts_t <- ts_df[ts_df$tissue == tissues[i], ]
+      points(ts_t$Power, ts_t$signed_R2, type = "b", pch = 16, col = cols[[tissues[i]]])
+    }
+  }
+
+  # 2) slope
+  if (!is.na(slope_col)) {
+    yr <- range(ts_df[[slope_col]], -1, na.rm = TRUE)
+    i <- 1
+    ts_t <- ts_df[ts_df$tissue == tissues[i], ]
+    plot(ts_t$Power, ts_t[[slope_col]], type = "b", pch = 16, col = cols[[tissues[i]]],
+         ylim = yr, xlab = expression(beta), ylab = "Slope")
+    if (length(tissues) > 1) {
+      for (i in 2:length(tissues)) {
+        ts_t <- ts_df[ts_df$tissue == tissues[i], ]
+        points(ts_t$Power, ts_t[[slope_col]], type = "b", pch = 16, col = cols[[tissues[i]]])
+      }
+    }
+  } else {
+    plot.new(); title("Slope (missing in TS_fit_curves)")
+  }
+
+  # 3) mean connectivity
+  if (!is.na(meank_col)) {
+    yr <- range(ts_df[[meank_col]], na.rm = TRUE)
+    i <- 1
+    ts_t <- ts_df[ts_df$tissue == tissues[i], ]
+    plot(ts_t$Power, ts_t[[meank_col]], type = "b", pch = 16, col = cols[[tissues[i]]],
+         ylim = yr, xlab = expression(beta), ylab = "Mean connectivity")
+    if (length(tissues) > 1) {
+      for (i in 2:length(tissues)) {
+        ts_t <- ts_df[ts_df$tissue == tissues[i], ]
+        points(ts_t$Power, ts_t[[meank_col]], type = "b", pch = 16, col = cols[[tissues[i]]])
+      }
+    }
+    # 4) log10(mean connectivity)
+    yr <- range(log10(ts_df[[meank_col]]), na.rm = TRUE)
+    i <- 1
+    ts_t <- ts_df[ts_df$tissue == tissues[i], ]
+    plot(ts_t$Power, log10(ts_t[[meank_col]]), type = "b", pch = 16, col = cols[[tissues[i]]],
+         ylim = yr, xlab = expression(beta), ylab = "Mean connectivity (log10)")
+    if (length(tissues) > 1) {
+      for (i in 2:length(tissues)) {
+        ts_t <- ts_df[ts_df$tissue == tissues[i], ]
+        points(ts_t$Power, log10(ts_t[[meank_col]]), type = "b", pch = 16, col = cols[[tissues[i]]])
+      }
+    }
+  } else {
+    plot.new(); title("Mean connectivity (missing)"); plot.new(); title("Mean connectivity (log10) (missing)")
+  }
+
+  legend("topright", legend = tissues, col = cols[tissues], pch = 16, cex = 1.0, bty = "n")
+}
+
+# ======================= 3) Beta matrix heatmap + CSV =======================
+build_beta_matrix <- function(beta_info, tissues) {
+  B <- matrix(NA_real_, nrow = length(tissues), ncol = length(tissues),
+              dimnames = list(tissues, tissues))
+  ts_map <- beta_info$TS_power_map
+  if (is.null(ts_map) || all(is.na(ts_map))) {
+    diag(B) <- beta_info$TS_power
+  } else {
+    for (t in tissues) B[t, t] <- as.numeric(ts_map[[t]])
+  }
+  ct_map <- beta_info$CT_power_map
+  if (!is.null(ct_map) && length(ct_map)) {
+    for (nm in names(ct_map)) {
+      ab <- .split_pair(nm)[[1]]
+      if (length(ab) != 2) next
+      a <- ab[1]; b <- ab[2]
+      if (a %in% tissues && b %in% tissues) {
+        B[a, b] <- as.numeric(ct_map[[nm]])
+        B[b, a] <- as.numeric(ct_map[[nm]])
+      }
+    }
+  } else {
+    for (i in seq_along(tissues)) for (j in seq_along(tissues)) if (i != j) B[i,j] <- beta_info$CT_power
+  }
+  B
+}
+
+plot_beta_matrix_heatmap <- function(beta_info, tissues,
+                                     out_pdf = "plots/betas_heatmap.pdf",
+                                     out_csv = "output/beta_matrix.csv",
+                                     palette_fun = function() grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(9, "Spectral")))(21)) {
+  .require_or_stop(c("gplots", "RColorBrewer"))
+  dir.create(dirname(out_pdf), showWarnings = FALSE, recursive = TRUE)
+  dir.create(dirname(out_csv), showWarnings = FALSE, recursive = TRUE)
+
+  B <- build_beta_matrix(beta_info, tissues)
+  gplots::heatmap.2(B, trace = "none",
+                    col = palette_fun(),
+                    cellnote = round(B, 2), notecol = "black",
+                    margins = c(6,6), key = TRUE, density.info = "none",
+                    main = "Optimal β (TS on diag, CT off-diag)")
+  pdf(out_pdf, width = 5, height = 5); 
+  gplots::heatmap.2(B, trace = "none",
+                    col = palette_fun(),
+                    cellnote = round(B, 2), notecol = "black",
+                    margins = c(6,6), key = TRUE, density.info = "none",
+                    main = "Optimal β (TS on diag, CT off-diag)")
+  dev.off()
+
+  write.csv(B, file = out_csv, row.names = TRUE)
+  invisible(list(mat = B, pdf = out_pdf, csv = out_csv))
+}
+
+make_all_beta_plots <- function(beta_info, tissues,
+                                out_prefix = "xwgcna",
+                                series_pdf = file.path("plots", paste0(out_prefix, "_beta_series.pdf")),
+                                summaries_pdf = file.path("plots", paste0(out_prefix, "_beta_series_tissue_summaries.pdf")),
+                                heatmap_pdf = file.path("plots", paste0(out_prefix, "_betas_heatmap.pdf")),
+                                heatmap_csv = file.path("output", paste0(out_prefix, "_beta_matrix.csv"))) {
+  vTS <- beta_info$TS_power
+  vCT <- beta_info$CT_power
+
+  plot_beta_series_pdf(beta_info, tissues, out_file = series_pdf, vline_TS = vTS, vline_CT = vCT)
+  plot_tissue_summaries_pdf(beta_info, tissues, out_file = summaries_pdf)
+  plot_beta_matrix_heatmap(beta_info, tissues, out_pdf = heatmap_pdf, out_csv = heatmap_csv)
+
+  message("✓ Plots written:\n  - ", series_pdf,
+          "\n  - ", summaries_pdf,
+          "\n  - ", heatmap_pdf,
+          "\n✓ Beta matrix CSV: ", heatmap_csv)
+}
 
 R2_connectivity <- function(adj_mat) {
   #--------------------------For scale Free-----------------------------
   k <- rowSums(adj_mat)
-  r2 <- checkScaleFree(k)$Rsquared.SFT
+  r2 <- checkScaleFree_logbin(k)$Rsquared.SFT
   r2_conn <- list(r2=r2, mean_conn=mean(k), median_conn=median(k), max_conn=max(k), min_conn=min(k))
   
   #------------------For connectons-----------------------
@@ -587,7 +853,7 @@ pickSoftThreshold_withinTissue <- function(
     diag(B) <- 0                    
     k <- rowSums(B)                
 
-    cf <- checkScaleFree(k, nBreaks = nBreaks, removeFirst = removeFirst)
+    cf <- checkScaleFree_logbin(k, nBreaks = nBreaks, removeFirst = removeFirst)
     r2    <- cf$Rsquared.SFT[1]
     slope <- cf$slope.SFT[1]
 
@@ -599,14 +865,18 @@ pickSoftThreshold_withinTissue <- function(
   }
   list(fitIndices = fit_df)
 }
-
+.first_bin_mass <- function(k, nBreaks) {
+  br <- seq(min(k, na.rm=TRUE), max(k, na.rm=TRUE), length.out = nBreaks + 1L)
+  if (!is.finite(br[1]) || !is.finite(br[2])) return(0)
+  mean(k >= br[1] & k <= br[2], na.rm = TRUE)
+}
 pickSoftThreshold_crossTissue <- function(
   Mi, Mj,                       
   powerVector = c(1:10, seq(12, 20, 2)),
   cor_method  = "pearson",
   unsigned    = TRUE,
   nBreaks     = 10,
-  removeFirst = FALSE,
+  removeFirst = TRUE,
   use_signed_R2 = FALSE
 ){
   stopifnot(nrow(Mi) == nrow(Mj))
@@ -626,9 +896,17 @@ pickSoftThreshold_crossTissue <- function(
   for (ix in seq_along(powerVector)) {
     b <- powerVector[ix]
     B <- S ^ b
-    k <- c(rowSums(B), colSums(B))     
+    B[!is.finite(B)] <- 0
+    # k <- c(rowSums(B), colSums(B))
+    k <- c(rowSums(B) / ncol(B), colSums(B) / nrow(B))  # normalize by number of genes in other tissue
+    k <- k * min(nrow(B), ncol(B))  # rescale to original scale
+    k[!is.finite(k)] <- 0
 
-    cf <- checkScaleFree(k, nBreaks = nBreaks, removeFirst = removeFirst)
+    # rmFirst <- removeFirst || (.first_bin_mass(k, nBreaks) > 0.4)
+    prop_zero <- mean(k < 1e-6, na.rm=TRUE)
+    message(sprintf("[β=%a] mean(k)=%.3f, median(k)=%.3f, max(k)=%.3f, zeros=%.1f%%\n",
+              b, mean(k), median(k), max(k), 100*prop_zero))
+    cf <- checkScaleFree_logbin(k, nBreaks = nBreaks, removeFirst = removeFirst)
     r2    <- cf$Rsquared.SFT[1]
     slope <- cf$slope.SFT[1]
 
@@ -637,6 +915,9 @@ pickSoftThreshold_crossTissue <- function(
     fit_df$mean.k[ix]   <- mean(k)
     fit_df$median.k[ix] <- stats::median(k)
     fit_df$max.k[ix]    <- max(k)
+    prop_zero <- mean(k < 1e-6, na.rm=TRUE)
+    message(sprintf("[β=%a] mean(k)=%.3f, median(k)=%.3f, max(k)=%.3f, zeros=%.1f%%\n",
+              b, mean(k), median(k), max(k), 100*prop_zero))
   }
   list(fitIndices = fit_df)
 }
@@ -662,8 +943,8 @@ auto_pick_powers <- function(
   beta_grid = c(1:10, seq(12, 20, 2)),
   targetR2 = 0.80,
   unsigned        = TRUE,
-  nBreaks         = 50,
-  removeFirst     = FALSE,
+  nBreaks         = 10,
+  removeFirst     = TRUE,
   use_signed_R2_TS = FALSE,
   use_signed_R2_CT = FALSE
 ){
@@ -968,6 +1249,102 @@ wgcna_pick_TS <- function(expr_mat,
 }
 
 # --------------------------- CT picker ---------------------------
+
+wgcna_pick_CT_new <- function(
+  expr_A, expr_B,
+  aggregate_by_donor = FALSE,
+  powerVector = c(1:10, seq(12, 20, 2)),
+  TOMType     = "unsigned",        # "unsigned" | "signed" | "signed hybrid"
+  cor_method  = "pearson",         # "pearson" | "bicor"
+  bicor_maxPOutliers = 1,
+  bicor_robustY = FALSE,
+  targetR2   = 0.80,
+  require_neg_slope = TRUE,
+  nBreaks    = 50,
+  removeFirst = TRUE,
+  min_common = 3L,
+  verbose    = 1
+){
+  stopifnot(is.matrix(expr_A) || is.data.frame(expr_A))
+  stopifnot(is.matrix(expr_B) || is.data.frame(expr_B))
+  X_A <- expr_A; X_B <- expr_B
+
+  if (aggregate_by_donor) {
+    X_A <- .aggregate_by_donor(X_A)
+    X_B <- .aggregate_by_donor(X_B)
+  }
+
+  # יישור דונורים משותפים
+  common <- intersect(rownames(X_A), rownames(X_B))
+  if (length(common) < min_common) {
+    if (verbose) message(sprintf(
+      "[wgcna_pick_CT] Too few common donors: %d < %d", length(common), min_common))
+    return(list(
+      beta = NA_integer_,
+      fitIndices = data.frame(Power = powerVector, SFT.R.sq = NA_real_,
+                              slope.SFT = NA_real_, mean.k = NA_real_,
+                              median.k = NA_real_, max.k = NA_real_)
+    ))
+  }
+  Mi <- X_A[common, , drop = FALSE]
+  Mj <- X_B[common, , drop = FALSE]
+
+  # קורלציה בין-רקמתית (genes_A x genes_B)
+  if (tolower(cor_method) == "bicor") {
+    S <- WGCNA::bicor(Mi, Mj, use = "pairwise.complete.obs",
+                      maxPOutliers = bicor_maxPOutliers, robustY = bicor_robustY)
+  } else {
+    S <- stats::cor(Mi, Mj, use = "pairwise.complete.obs", method = "pearson")
+  }
+  S[!is.finite(S)] <- 0
+
+  # המרת קורלציה ל-adjacency לפי רשת חתומה/לא חתומה
+  .adj_from_cor <- function(S, beta, TOMType) {
+    tt <- tolower(TOMType)
+    if (startsWith(tt, "signed")) {
+      A <- ((S + 1)/2) ^ beta         # שומר סימן (בטווח [0,1])
+    } else {
+      A <- abs(S) ^ beta               # unsigned
+    }
+    A[!is.finite(A)] <- 0
+    A
+  }
+
+  fit_df <- data.frame(
+    Power    = powerVector,
+    SFT.R.sq = NA_real_,
+    slope    = NA_real_,
+    mean.k   = NA_real_,
+    median.k = NA_real_,
+    max.k    = NA_real_,
+    stringsAsFactors = FALSE
+  )
+
+  for (ix in seq_along(powerVector)) {
+    b <- powerVector[ix]
+    A <- .adj_from_cor(S, b, TOMType)
+    # דרגות משני הצדדים (דו-חלקי): שורות = גנים ברקמה A, עמודות = גנים ברקמה B
+    k <- c(rowSums(A, na.rm = TRUE), colSums(A, na.rm = TRUE))
+    k[!is.finite(k)] <- 0
+
+    sf <- WGCNA::scaleFreeFitIndex(k, nBreaks = nBreaks, removeFirst = removeFirst)
+    fit_df$SFT.R.sq[ix] <- sf$Rsquared.SFT
+    fit_df$slope[ix]    <- sf$slope.SFT
+    fit_df$mean.k[ix]   <- mean(k)
+    fit_df$median.k[ix] <- stats::median(k)
+    fit_df$max.k[ix]    <- max(k)
+    if (verbose > 1) {
+      message(sprintf("[β=%s] R2=%.3f, slope=%.3f, mean(k)=%.2f", b, sf$Rsquared.SFT, sf$slope.SFT, mean(k)))
+    }
+  }
+
+  # בחירת β: הנמוך החוצה סף R^2 ובעל שיפוע שלילי (אם מבוקש); אחרת argmax R^2
+  ok <- which(!is.na(fit_df$SFT.R.sq) & fit_df$SFT.R.sq >= targetR2)
+  if (require_neg_slope) ok <- ok[fit_df$slope[ok] < 0]
+  beta_chosen <- if (length(ok)) min(fit_df$Power[ok]) else fit_df$Power[which.max(fit_df$SFT.R.sq)]
+
+  list(beta = as.integer(beta_chosen), fitIndices = fit_df)
+}
 # Builds a paired expression matrix (samples-in-common x [genes_A | genes_B])
 # and runs WGCNA::pickSoftThreshold() on it, exactly like the STARNET snippet.
 wgcna_pick_CT <- function(expr_A, expr_B,
@@ -1020,19 +1397,24 @@ wgcna_pick_CT <- function(expr_A, expr_B,
 
 # --------------------------- Auto picker (TS & CT) ---------------------------
 # Mirrors your current auto_pick_powers() return shape so you can plug it in.
-wgcna_auto_pick_powers <- function(
-  tissue_names,
+wgcna_auto_pick_powers_new <- function(
+ tissue_names,
   tissue_expr_file_names,
-  sd_quantile = 0.50,              # STARNET used ~0.5 in the example
+  sd_quantile = 0.50,
   max_genes_per_tissue = 5000,
   TOMType = "unsigned",
-  cor_method = "pearson",
+  cor_method = "pearson",                # "pearson" | "bicor"
   powerVector = seq(0.5, 20, length.out = 20),
   targetR2 = 0.80,
   require_neg_slope = TRUE,
   verbose = 5,
+  # ---- CT-specific knobs ----
   aggregate_by_donor_CT = FALSE,
-  min_common_CT = 3L
+  min_common_CT = 3L,
+  ct_nBreaks = 50,
+  ct_removeFirst = TRUE,
+  bicor_maxPOutliers = 1,
+  bicor_robustY = FALSE
 ) {
   stopifnot(length(tissue_names) == length(tissue_expr_file_names))
   T <- length(tissue_names)
@@ -1052,23 +1434,22 @@ wgcna_auto_pick_powers <- function(
   }
 
   # ---- TS per tissue ----
-  message("Loading expression data for ", T, " tissues…")
   TS_per_tissue <- integer(T)
   TS_power_map  <- setNames(integer(T), tissue_names)
   TS_fit_curves <- vector("list", T)
 
   for (i in seq_len(T)) {
-    message("Loading expression data for tissue: ", tissue_names[i])
     ts_fit <- tryCatch(
       wgcna_pick_TS(
-        expr_mat   = expr_list[[i]],
-        powerVector = powerVector,
-        TOMType     = TOMType,
-        cor_method  = cor_method,
-        verbose     = verbose,
-        targetR2    = targetR2,
+        expr_mat          = expr_list[[i]],
+        powerVector       = powerVector,
+        TOMType           = TOMType,
+        cor_method        = cor_method,
+        verbose           = verbose,
+        targetR2          = targetR2,
         require_neg_slope = require_neg_slope
-      ), error = function(e) { message("[TS] ", tissue_names[i], ": ", e$message); NULL }
+      ),
+      error = function(e) { message("[TS] ", tissue_names[i], ": ", e$message); NULL }
     )
     if (!is.null(ts_fit)) {
       TS_per_tissue[i] <- ts_fit$beta
@@ -1077,46 +1458,63 @@ wgcna_auto_pick_powers <- function(
       TS_fit_curves[[i]] <- fi
     } else {
       TS_per_tissue[i] <- NA_integer_
-      TS_fit_curves[[i]] <- data.frame(Power = powerVector, SFT.R.sq = NA_real_, tissue = tissue_names[i])
+      TS_fit_curves[[i]] <- data.frame(Power = powerVector, SFT.R.sq = NA_real_,
+                                       tissue = tissue_names[i])
     }
     TS_power_map[tissue_names[i]] <- TS_per_tissue[i]
   }
-  message("Loading expression data for ", T, " tissues…")
   TS_power <- as.integer(stats::median(TS_per_tissue, na.rm = TRUE))
   TS_fit_curves_df <- do.call(rbind, TS_fit_curves)
 
-  # ---- CT per pair ----
-  CT_betas <- c()
+  # ---- CT per pair (using the NEW wgcna_pick_CT) ----
+  CT_betas <- integer(0)
   CT_power_map <- numeric(0)
   CT_fit_list <- list()
 
   if (T >= 2) {
     for (i in 1:(T - 1)) {
-      message("Processing CT pairs for tissue: ", tissue_names[i])
       for (j in (i + 1):T) {
         pair_id <- paste(tissue_names[i], tissue_names[j], sep = "||")
         ct_fit <- tryCatch(
-          wgcna_pick_CT(
+          wgcna_pick_CT_new(
             expr_A = expr_list[[i]], expr_B = expr_list[[j]],
             aggregate_by_donor = aggregate_by_donor_CT,
             powerVector = powerVector,
-            TOMType = TOMType,
-            cor_method = cor_method,
-            verbose = verbose,
-            targetR2 = targetR2,
+            TOMType     = TOMType,
+            cor_method  = cor_method,
+            bicor_maxPOutliers = bicor_maxPOutliers,
+            bicor_robustY      = bicor_robustY,
+            targetR2    = targetR2,
             require_neg_slope = require_neg_slope,
-            min_common = min_common_CT
-          ), error = function(e) { message("[CT] ", pair_id, ": ", e$message); NULL }
+            nBreaks     = ct_nBreaks,
+            removeFirst = ct_removeFirst,
+            min_common  = min_common_CT,
+            verbose     = verbose
+          ),
+          error = function(e) { message("[CT] ", pair_id, ": ", e$message); NULL }
         )
+
         if (!is.null(ct_fit) && !is.na(ct_fit$beta)) {
           CT_betas <- c(CT_betas, ct_fit$beta)
           CT_power_map[pair_id] <- ct_fit$beta
-          CT_fit_list[[length(CT_fit_list) + 1]] <-
-            data.frame(pair = pair_id, Power = ct_fit$fit_df$Power,
-                       Rsquared.SFT = ct_fit$fit_df$SFT.R.sq, stringsAsFactors = FALSE)
+
+          fi <- ct_fit$fitIndices
+          # שימור שם העמודה כדי להתאים לפונקציות שרטוט קיימות
+          CT_fit_list[[length(CT_fit_list) + 1]] <- data.frame(
+            pair = pair_id,
+            Power = fi$Power,
+            Rsquared.SFT = fi$SFT.R.sq,
+            slope.SFT    = if ("slope" %in% names(fi)) fi$slope else fi$slope.SFT,
+            mean.k       = fi$mean.k,
+            median.k     = fi$median.k,
+            max.k        = fi$max.k,
+            stringsAsFactors = FALSE
+          )
         } else {
           CT_fit_list[[length(CT_fit_list) + 1]] <-
-            data.frame(pair = pair_id, Power = powerVector, Rsquared.SFT = NA_real_)
+            data.frame(pair = pair_id, Power = powerVector,
+                       Rsquared.SFT = NA_real_, slope.SFT = NA_real_,
+                       mean.k = NA_real_, median.k = NA_real_, max.k = NA_real_)
         }
       }
     }
@@ -1127,7 +1525,7 @@ wgcna_auto_pick_powers <- function(
     data.frame(pair = character(), Power = numeric(), Rsquared.SFT = numeric())
 
   list(
-    method         = "wgcna",
+    method         = "wgcna+scaleFreeFitIndex(CT)",
     TS_power       = TS_power,
     CT_power       = CT_power,
     TS_per_tissue  = TS_per_tissue,
@@ -1138,6 +1536,285 @@ wgcna_auto_pick_powers <- function(
     CT_power_map   = CT_power_map
   )
 }
+wgcna_auto_pick_powers <- function(
+  tissue_names,
+  tissue_expr_file_names,
+  sd_quantile = 0.50,
+  max_genes_per_tissue = 5000,
+  TOMType = "unsigned",
+  cor_method = "pearson",                # "pearson" | "bicor"
+  powerVector = seq(0.5, 20, length.out = 20),
+  targetR2 = 0.80,
+  require_neg_slope = TRUE,
+  verbose = 5,
+  # ---- CT-specific knobs ----
+  aggregate_by_donor_CT = FALSE,
+  min_common_CT = 3L,
+  ct_nBreaks = 50,
+  ct_removeFirst = TRUE,
+  bicor_maxPOutliers = 1,
+  bicor_robustY = FALSE
+) {
+  stopifnot(length(tissue_names) == length(tissue_expr_file_names))
+  T <- length(tissue_names)
+
+  # Load & prefilter expression per tissue (samples x genes)
+  expr_list <- vector("list", T)
+  names(expr_list) <- tissue_names
+  message("Loading expression data for ", T, " tissues…")
+  for (i in seq_len(T)) {
+    X <- LoadExprData(
+      tissue_name = tissue_names[i],
+      tissue_file_name = tissue_expr_file_names[i],
+      sd_quantile = sd_quantile,
+      max_genes_per_tissue = max_genes_per_tissue
+    )
+    expr_list[[i]] <- X
+  }
+
+  # ---- TS per tissue ----
+  TS_per_tissue <- integer(T)
+  TS_power_map  <- setNames(integer(T), tissue_names)
+  TS_fit_curves <- vector("list", T)
+
+  for (i in seq_len(T)) {
+    ts_fit <- tryCatch(
+      wgcna_pick_TS(
+        expr_mat          = expr_list[[i]],
+        powerVector       = powerVector,
+        TOMType           = TOMType,
+        cor_method        = cor_method,
+        verbose           = verbose,
+        targetR2          = targetR2,
+        require_neg_slope = require_neg_slope
+      ),
+      error = function(e) { message("[TS] ", tissue_names[i], ": ", e$message); NULL }
+    )
+    if (!is.null(ts_fit)) {
+      TS_per_tissue[i] <- ts_fit$beta
+      fi <- ts_fit$fit_df
+      fi$tissue <- tissue_names[i]
+      TS_fit_curves[[i]] <- fi
+    } else {
+      TS_per_tissue[i] <- NA_integer_
+      TS_fit_curves[[i]] <- data.frame(Power = powerVector, SFT.R.sq = NA_real_,
+                                       tissue = tissue_names[i])
+    }
+    TS_power_map[tissue_names[i]] <- TS_per_tissue[i]
+  }
+  TS_power <- as.integer(stats::median(TS_per_tissue, na.rm = TRUE))
+  TS_fit_curves_df <- do.call(rbind, TS_fit_curves)
+
+  # ---- CT per pair (using the NEW wgcna_pick_CT) ----
+  CT_betas <- integer(0)
+  CT_power_map <- numeric(0)
+  CT_fit_list <- list()
+
+  if (T >= 2) {
+    for (i in 1:(T - 1)) {
+      for (j in (i + 1):T) {
+        pair_id <- paste(tissue_names[i], tissue_names[j], sep = "||")
+        ct_fit <- tryCatch(
+          wgcna_pick_CT(
+            expr_A = expr_list[[i]], expr_B = expr_list[[j]],
+            aggregate_by_donor = aggregate_by_donor_CT,
+            powerVector = powerVector,
+            TOMType     = TOMType,
+            cor_method  = cor_method,
+            bicor_maxPOutliers = bicor_maxPOutliers,
+            bicor_robustY      = bicor_robustY,
+            targetR2    = targetR2,
+            require_neg_slope = require_neg_slope,
+            nBreaks     = ct_nBreaks,
+            removeFirst = ct_removeFirst,
+            min_common  = min_common_CT,
+            verbose     = verbose
+          ),
+          error = function(e) { message("[CT] ", pair_id, ": ", e$message); NULL }
+        )
+
+        if (!is.null(ct_fit) && !is.na(ct_fit$beta)) {
+          CT_betas <- c(CT_betas, ct_fit$beta)
+          CT_power_map[pair_id] <- ct_fit$beta
+
+          fi <- ct_fit$fitIndices
+          # שימור שם העמודה כדי להתאים לפונקציות שרטוט קיימות
+          CT_fit_list[[length(CT_fit_list) + 1]] <- data.frame(
+            pair = pair_id,
+            Power = fi$Power,
+            Rsquared.SFT = fi$SFT.R.sq,
+            slope.SFT    = if ("slope" %in% names(fi)) fi$slope else fi$slope.SFT,
+            mean.k       = fi$mean.k,
+            median.k     = fi$median.k,
+            max.k        = fi$max.k,
+            stringsAsFactors = FALSE
+          )
+        } else {
+          CT_fit_list[[length(CT_fit_list) + 1]] <-
+            data.frame(pair = pair_id, Power = powerVector,
+                       Rsquared.SFT = NA_real_, slope.SFT = NA_real_,
+                       mean.k = NA_real_, median.k = NA_real_, max.k = NA_real_)
+        }
+      }
+    }
+  }
+
+  CT_power <- if (length(CT_betas)) as.integer(stats::median(CT_betas, na.rm = TRUE)) else 3L
+  CT_fit_curves_df <- if (length(CT_fit_list)) do.call(rbind, CT_fit_list) else
+    data.frame(pair = character(), Power = numeric(), Rsquared.SFT = numeric())
+
+  list(
+    method         = "wgcna+scaleFreeFitIndex(CT)",
+    TS_power       = TS_power,
+    CT_power       = CT_power,
+    TS_per_tissue  = TS_per_tissue,
+    CT_per_pair    = as.integer(CT_betas),
+    TS_fit_curves  = TS_fit_curves_df,
+    CT_fit_curves  = CT_fit_curves_df,
+    TS_power_map   = TS_power_map,
+    CT_power_map   = CT_power_map
+  )
+}
+
+# ---- TS: degrees from within-tissue adjacency ----
+.compute_TS_degrees <- function(expr_mat, beta, cor_method = "pearson", unsigned = TRUE) {
+  S <- cor(expr_mat, use = "pairwise.complete.obs", method = cor_method)
+  if (unsigned) S <- abs(S)
+  A <- S^beta
+  diag(A) <- 0
+  k <- rowSums(A, na.rm = TRUE)
+  k[is.finite(k) & k > 0]
+}
+
+# ---- CT: degrees from cross-tissue bipartite adjacency ----
+.compute_CT_degrees <- function(expr_A, expr_B, beta,
+                                cor_method = "pearson",
+                                unsigned = TRUE,
+                                aggregate_by_donor = FALSE,
+                                min_common = 3L) {
+  XA <- expr_A; XB <- expr_B
+  if (aggregate_by_donor) {
+    XA <- .aggregate_by_donor(XA)
+    XB <- .aggregate_by_donor(XB)
+  }
+  common <- intersect(rownames(XA), rownames(XB))
+  if (length(common) < min_common) return(numeric(0))
+  Mi <- XA[common, , drop = FALSE]
+  Mj <- XB[common, , drop = FALSE]
+
+  S <- cor(Mi, Mj, use = "pairwise.complete.obs", method = cor_method)
+  if (unsigned) S <- abs(S)
+  S[!is.finite(S)] <- 0
+  A <- S^beta
+
+  # כמו ב-pickSoftThreshold_crossTissue שלך (נרמול ואז rescale)
+  k <- c(rowSums(A) / ncol(A), colSums(A) / nrow(A))
+  k <- k * min(nrow(A), ncol(A))
+  k <- k[is.finite(k) & k > 0]
+  k
+}
+
+plot_scaleFree_TS_CT <- function(
+  beta_info,
+  tissue_names, tissue_expr_file_names,
+  mode = c("chosen", "all"),                 
+  cor_method = "pearson",
+  unsigned = TRUE,
+  nBreaks = 10, removeFirst = TRUE,
+  aggregate_by_donor_CT = FALSE,
+  min_common_CT = 3L,
+  out_dir = "scaleFreePlots"
+){
+  mode <- match.arg(mode)
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+  stopifnot(length(tissue_names) == length(tissue_expr_file_names))
+  T <- length(tissue_names)
+  expr_list <- setNames(vector("list", T), tissue_names)
+  for (i in seq_len(T)) {
+    expr_list[[i]] <- LoadExprData(
+      tissue_name = tissue_names[i],
+      tissue_file_name = tissue_expr_file_names[i],
+      sd_quantile = 0.00, max_genes_per_tissue = 1e9
+    )
+  }
+
+  # ================= TS =================
+  if (!is.null(beta_info$TS_fit_curves) && nrow(beta_info$TS_fit_curves)) {
+    ts_map <- beta_info$TS_power_map
+    for (t in tissue_names) {
+      if (mode == "chosen") {
+        betas <- as.numeric(ts_map[[t]])
+        betas <- betas[is.finite(betas)]
+      } else {
+        betas <- unique(beta_info$TS_fit_curves$Power[beta_info$TS_fit_curves$tissue == t])
+      }
+      if (!length(betas)) next
+
+      pdf(file.path(out_dir, sprintf("scaleFree_TS_%s.pdf", gsub("[^A-Za-z0-9]+","_", t))),
+          width = 5, height = 5 * length(betas))
+      par(mfrow = c(length(betas), 1), mar = c(5,5,3,2))
+      for (b in betas) {
+        k <- .compute_TS_degrees(expr_list[[t]], b, cor_method, unsigned)
+        if (!length(k)) { plot.new(); title(sprintf("%s | TS | beta=%s [no k]", t, b)); next }
+        WGCNA::scaleFreePlot(k, main = sprintf("%s | TS | \u03B2 = %s", t, b),
+                             nBreaks = nBreaks, removeFirst = removeFirst)
+        fit <- WGCNA::scaleFreeFitIndex(k, nBreaks = nBreaks, removeFirst = removeFirst)
+        mtext(sprintf("R^2 = %.3f | slope = %.3f", fit$Rsquared.SFT, fit$slope.SFT),
+              side = 3, adj = 1, cex = 0.8)
+      }
+      dev.off()
+    }
+  }
+
+  # ================= CT =================
+  if (!is.null(beta_info$CT_fit_curves) && nrow(beta_info$CT_fit_curves)) {
+    ct_map <- beta_info$CT_power_map
+    pairs <- combn(tissue_names, 2, simplify = FALSE)
+    for (pr in pairs) {
+      a <- pr[1]; b <- pr[2]
+      pair_id_ab <- paste(a, b, sep = "||")
+      pair_id_ba <- paste(b, a, sep = "||")
+
+      if (mode == "chosen" && length(ct_map)) {
+        chosen <- if (!is.na(ct_map[pair_id_ab])) ct_map[pair_id_ab] else ct_map[pair_id_ba]
+        betas <- as.numeric(chosen)
+        betas <- betas[is.finite(betas)]
+        if (!length(betas)) next
+      } else if (mode == "chosen") {
+        betas <- as.numeric(beta_info$CT_power)
+      } else {
+        keep <- beta_info$CT_fit_curves$pair %in% c(pair_id_ab, pair_id_ba)
+        betas <- unique(beta_info$CT_fit_curves$Power[keep])
+      }
+      if (!length(betas)) next
+
+      pdf(file.path(out_dir, sprintf("scaleFree_CT_%s__%s.pdf",
+                                     gsub("[^A-Za-z0-9]+","_", a),
+                                     gsub("[^A-Za-z0-9]+","_", b))),
+          width = 5, height = 5 * length(betas))
+      par(mfrow = c(length(betas), 1), mar = c(5,5,3,2))
+      for (beta in betas) {
+        k <- .compute_CT_degrees(expr_list[[a]], expr_list[[b]], beta,
+                                 cor_method, unsigned,
+                                 aggregate_by_donor = aggregate_by_donor_CT,
+                                 min_common = min_common_CT)
+        if (!length(k)) { plot.new(); title(sprintf("%s↔%s | CT | beta=%s [no k]", a, b, beta)); next }
+        WGCNA::scaleFreePlot(k, main = sprintf("%s \u2194 %s | CT | \u03B2 = %s", a, b, beta),
+                             nBreaks = nBreaks, removeFirst = removeFirst)
+        fit <- WGCNA::scaleFreeFitIndex(k, nBreaks = nBreaks, removeFirst = removeFirst)
+        mtext(sprintf("R^2 = %.3f | slope = %.3f", fit$Rsquared.SFT, fit$slope.SFT),
+              side = 3, adj = 1, cex = 0.8)
+      }
+      dev.off()
+    }
+  }
+
+  message("✓ scaleFreePlot PDFs ", normalizePath(out_dir))
+}
+
+
+
 
 # =========================
 # Integration hook into your main function
@@ -1472,6 +2149,7 @@ XWGCNA_Clusters_autoBeta <- function(
     save_intermediates = TRUE,
     plot_heatmap = TRUE,
     auto_beta = TRUE,
+    beta_method = c("custom", "wgcna", "wgcna_new"),
     targetR2 = 0.80,
     beta_grid = c(1:10, seq(12, 20, 2)),
     wgcna_powerVector = seq(0.5, 20, length.out = 20),
@@ -1479,7 +2157,10 @@ XWGCNA_Clusters_autoBeta <- function(
     plot_beta_curves = TRUE,
     blockwise_TOM = TRUE,
     TOM_block_size = 2000L,
-    group = "young"
+    group = "young",
+    scaleFree_plots = "all",
+    scaleFree_nBreaks = 12,
+    scaleFree_removeFirst = TRUE
 ){
     stopifnot(length(tissue_names) == length(tissue_expr_file_names))
 
@@ -1487,6 +2168,23 @@ XWGCNA_Clusters_autoBeta <- function(
     CT_map <- NULL
     beta_info <- NULL
     if (auto_beta) {
+      if (beta_method == "wgcna_new"){
+        message("Auto-picking TS/CT betas (WGCNA new)…")
+        beta_info <- wgcna_auto_pick_powers_new(
+          tissue_names, tissue_expr_file_names,
+          sd_quantile = sd_quantile,
+          max_genes_per_tissue = max_genes_per_tissue,
+          TOMType = TOMType,
+          cor_method = cor_method,
+          powerVector = wgcna_powerVector,
+          targetR2 = targetR2,
+          require_neg_slope = TRUE,
+          verbose = 5,
+          aggregate_by_donor_CT = aggregate_by_donor_CT,
+          min_common_CT = 3L,
+          ct_nBreaks = 12
+        )
+      }
       if (beta_method == "wgcna") {
         message("Auto-picking TS/CT betas (WGCNA)…")
         beta_info <- wgcna_auto_pick_powers(
@@ -1509,6 +2207,7 @@ XWGCNA_Clusters_autoBeta <- function(
             beta_grid = beta_grid,
             targetR2 = targetR2
         )
+      }
         TS_power <- beta_info$TS_power
         TS_map <- beta_info$TS_power_map
         CT_power <- beta_info$CT_power
@@ -1516,15 +2215,35 @@ XWGCNA_Clusters_autoBeta <- function(
         message(sprintf("Auto β selected: TS=%d (per tissue: %s); CT=%d",
                     TS_power, paste(beta_info$TS_per_tissue, collapse = ","), CT_power))
         if (plot_beta_curves) {
-            plots_list <- plot_beta_curves_per_tissue(
+          plots_list <- plot_beta_curves_per_tissue(
             beta_info,
             out_prefix = paste0(out_prefix, "_per_tissue"),
             targetR2   = targetR2,
             save_png   = TRUE
             )
+          tissues_vec <- tissue_names
+          make_all_beta_plots(
+            beta_info,
+            tissues = tissues_vec,
+            out_prefix = out_prefix
+          )
         }
-      }
-    } else {
+        if (scaleFree_plots != "none") {
+            plot_scaleFree_TS_CT(
+                beta_info = beta_info,
+                tissue_names = tissue_names,
+                tissue_expr_file_names = tissue_expr_file_names,
+                mode = match.arg(scaleFree_plots),        
+                out_dir = file.path("plots", paste0(out_prefix, "_scaleFree")),
+                cor_method = cor_method,
+                unsigned = (tolower(TOMType) == "unsigned"),
+                nBreaks = scaleFree_nBreaks,
+                removeFirst = scaleFree_removeFirst,
+                aggregate_by_donor_CT = aggregate_by_donor_CT,
+                min_common_CT = 3L
+            )
+        }
+      } else {
       message("Using constant β values.")
       TS_map <- setNames(rep.int(TS_power, length(tissue_names)), tissue_names)
       CT_map <- .make_CT_map(tissue_names, CT_power)
@@ -1620,5 +2339,6 @@ XWGCNA_Clusters_autoBeta <- function(
             CT_power         = CT_power
         ))
     }
-}
+  }
+
 
