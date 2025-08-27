@@ -561,7 +561,7 @@ network_heatmap_WGCNA <- function(
   diss <- 1 - subTOM
   hc <- hclust(as.dist(diss), method = "average")
 
-  plotTOM <- diss
+  plotTOM <- diss^ tom_power
   diag(plotTOM) <- NA
 
   png(out_file, width = 1200, height = 1200, res = 140)
