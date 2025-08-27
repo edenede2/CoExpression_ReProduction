@@ -2184,8 +2184,7 @@ XWGCNA_Clusters_autoBeta <- function(
           min_common_CT = 3L,
           ct_nBreaks = 12
         )
-      }
-      if (beta_method == "wgcna") {
+      } else if (beta_method == "wgcna") {
         message("Auto-picking TS/CT betas (WGCNA)…")
         beta_info <- wgcna_auto_pick_powers(
           tissue_names, tissue_expr_file_names,
