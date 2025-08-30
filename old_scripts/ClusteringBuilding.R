@@ -534,7 +534,7 @@ network_heatmap_gplots <- function(
 
 network_heatmap_WGCNA <- function(
   TOM_mat, dynamicColors, restGenes = NULL,
-  out_file = "TOM_heatmap_WGCNA.png", tom_power = 4,
+  out_file = "TOM_heatmap_WGCNA.png", tom_power = 2,
   palette_fun = function() {
     gplots::colorpanel(250, 'red', 'orange', 'lemonchiffon')
   }
@@ -728,7 +728,7 @@ Clusters_Table <- function(TOM_mat, minClusterSize = 30, plot_heatmap = FALSE, t
       dynamicColors = dynamicColors,
       restGenes = restGenes,
       out_file = paste0("TOM_heatmap_WGCNA_", group, ".png"),
-      tom_power = 4
+      tom_power = 2
     )
 
     module_labels <- sort(setdiff(unique(as.integer(dynamicMods)), 0L))
