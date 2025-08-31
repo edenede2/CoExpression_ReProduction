@@ -70,6 +70,21 @@ filterCommonGOTerms = function(go, max_preval=50) {
 }
 
 
+# Helper: extract top-N GO term names per module for a given ontology table
+get_top_terms_per_module <- function(go_filtered, ontology = c("BP","CC","MF"), n_modules, top_n = 5) {
+  ontology <- match.arg(ontology)
+  tab <- go_filtered$bestPTerms[[ontology]]$enrichment
+  if (is.null(tab) || !nrow(tab)) return(rep(list(character(0)), n_modules))
+  out <- vector("list", n_modules)
+  for (k in seq_len(n_modules)) {
+    idx <- tab$module == k
+    terms <- tab$termName[idx]
+    terms <- terms[!is.na(terms)]
+    out[[k]] <- utils::head(terms, top_n)
+  }
+  out
+}
+
 enrichmentGO = function(modules) {
   require(org.Hs.eg.db)
   require(WGCNA)
@@ -173,35 +188,15 @@ go_enrich_filter = filterCommonGOTerms(go_enrich, 50)
 kegg_enrich = enrichmentKegg(Clusters_table)
 
 # Extract top enrichment terms
-top_go_terms_bp = sapply(1:max(Clusters_table$Cluster.ID), function(k) {
-  enrichment = go_enrich_filter$bestPTerms$BP$enrichment
-  idx = enrichment$module == k
-  top_terms = enrichment$termName[idx][1:5]
-  top_terms = top_terms[!is.na(top_terms)]
-  return(top_terms)
-})
-
-top_go_terms_cc = sapply(1:max(Clusters_table$Cluster.ID), function(k) {
-  enrichment = go_enrich_filter$bestPTerms$CC$enrichment
-  idx = enrichment$module == k
-  top_terms = enrichment$termName[idx][1:5]
-  top_terms = top_terms[!is.na(top_terms)]
-  return(top_terms)
-})
-
-top_go_terms_mf = sapply(1:max(between$Cluster.ID), function(k) {
-  enrichment = go_enrich_filter$bestPTerms$MF$enrichment
-  idx = enrichment$module == k
-  top_terms = enrichment$termName[idx][1:5]
-  top_terms = top_terms[!is.na(top_terms)]
-  return(top_terms)
-})
-
+n_clu <- max(Clusters_table$Cluster.ID, na.rm = TRUE)
+top_go_terms_bp <- get_top_terms_per_module(go_enrich_filter, "BP", n_modules = n_clu, top_n = 5)
+top_go_terms_cc <- get_top_terms_per_module(go_enrich_filter, "CC", n_modules = n_clu, top_n = 5)
+top_go_terms_mf <- get_top_terms_per_module(go_enrich_filter, "MF", n_modules = n_clu, top_n = 5)
 
 go_tab = data.frame(
-  top_go_bp=sapply(top_go_terms_bp, paste, collapse=";"),
-  top_go_cc=sapply(top_go_terms_cc, paste, collapse=";"),
-  top_go_mf=sapply(top_go_terms_mf, paste, collapse=";")
+  top_go_bp = vapply(top_go_terms_bp, function(x) paste(x, collapse = ";"), character(1)),
+  top_go_cc = vapply(top_go_terms_cc, function(x) paste(x, collapse = ";"), character(1)),
+  top_go_mf = vapply(top_go_terms_mf, function(x) paste(x, collapse = ";"), character(1))
 )
 
 
@@ -235,9 +230,14 @@ write.table(go_enrich_filter$enrichmentP,
             "go_pmat_rosmap_full.tsv",
             sep="\t")
 
-cluster_summary <- data.frame(go_enrich)
-fit<- plot(barplot(cluster_summary, showCategory=20))
-fit
+# Save top GO terms per module summary
+write.table(
+  go_tab,
+  "go_top_terms_rosmap_full.csv",
+  sep = ",",
+  quote = FALSE,
+  row.names = FALSE
+)
 
 
 
@@ -254,42 +254,24 @@ clusters_details <- read.delim(
 )
 clusters_table <- read.delim(clusters_table_path, sep = "\t", header = TRUE)
 
-go_enrich <- enrichmentGO(clusters_table)
-go_enrich_filter <- filterCommonGOTerms(go_enrich, 50)
-kegg_enrich <- enrichmentKegg(clusters_table)
+go_enrich2 <- enrichmentGO(clusters_table)
+go_enrich_filter2 <- filterCommonGOTerms(go_enrich2, 50)
+kegg_enrich2 <- enrichmentKegg(clusters_table)
 
-# Extract top enrichment terms
-n_clu <- max(clusters_table$Cluster.ID, na.rm = TRUE)
+# Extract top enrichment terms for second run
+n_clu2 <- max(clusters_table$Cluster.ID, na.rm = TRUE)
+top_go_terms_bp2 <- get_top_terms_per_module(go_enrich_filter2, "BP", n_modules = n_clu2, top_n = 5)
+top_go_terms_cc2 <- get_top_terms_per_module(go_enrich_filter2, "CC", n_modules = n_clu2, top_n = 5)
+top_go_terms_mf2 <- get_top_terms_per_module(go_enrich_filter2, "MF", n_modules = n_clu2, top_n = 5)
 
-top_go_terms_bp <- sapply(seq_len(n_clu), function(k) {
-  enrichment <- go_enrich_filter$bestPTerms$BP$enrichment
-  idx <- enrichment$module == k
-  top_terms <- enrichment$termName[idx][1:5]
-  top_terms[!is.na(top_terms)]
-})
-
-top_go_terms_cc <- sapply(seq_len(n_clu), function(k) {
-  enrichment <- go_enrich_filter$bestPTerms$CC$enrichment
-  idx <- enrichment$module == k
-  top_terms <- enrichment$termName[idx][1:5]
-  top_terms[!is.na(top_terms)]
-})
-
-top_go_terms_mf <- sapply(seq_len(n_clu), function(k) {
-  enrichment <- go_enrich_filter$bestPTerms$MF$enrichment
-  idx <- enrichment$module == k
-  top_terms <- enrichment$termName[idx][1:5]
-  top_terms[!is.na(top_terms)]
-})
-
-go_tab <- data.frame(
-  top_go_bp = sapply(top_go_terms_bp, paste, collapse = ";"),
-  top_go_cc = sapply(top_go_terms_cc, paste, collapse = ";"),
-  top_go_mf = sapply(top_go_terms_mf, paste, collapse = ";")
+go_tab2 <- data.frame(
+  top_go_bp = vapply(top_go_terms_bp2, function(x) paste(x, collapse = ";"), character(1)),
+  top_go_cc = vapply(top_go_terms_cc2, function(x) paste(x, collapse = ";"), character(1)),
+  top_go_mf = vapply(top_go_terms_mf2, function(x) paste(x, collapse = ";"), character(1))
 )
 
 write.table(
-  kegg_enrich@compareClusterResult,
+  kegg_enrich2@compareClusterResult,
   "kegg_rosmap_5000.csv",
   sep = ",",
   quote = FALSE,
@@ -297,7 +279,7 @@ write.table(
 )
 
 write.table(
-  go_enrich_filter$bestPTerms$BP$enrichment,
+  go_enrich_filter2$bestPTerms$BP$enrichment,
   "go_bp_tab_rosmap_5000.csv",
   sep = ",",
   quote = FALSE,
@@ -305,7 +287,7 @@ write.table(
 )
 
 write.table(
-  go_enrich_filter$bestPTerms$CC$enrichment,
+  go_enrich_filter2$bestPTerms$CC$enrichment,
   "go_cc_tab_rosmap_5000.csv",
   sep = ",",
   quote = FALSE,
@@ -313,7 +295,7 @@ write.table(
 )
 
 write.table(
-  go_enrich_filter$bestPTerms$MF$enrichment,
+  go_enrich_filter2$bestPTerms$MF$enrichment,
   "go_mf_tab_rosmap_5000.csv",
   sep = ",",
   quote = FALSE,
@@ -321,9 +303,18 @@ write.table(
 )
 
 write.table(
-  go_enrich_filter$enrichmentP,
+  go_enrich_filter2$enrichmentP,
   "go_pmat_rosmap_5000.tsv",
   sep = "\t"
+)
+
+# Save top GO terms per module summary for second run
+write.table(
+  go_tab2,
+  "go_top_terms_rosmap_5000.csv",
+  sep = ",",
+  quote = FALSE,
+  row.names = FALSE
 )
 
 # Optional plotting (clusterProfiler barplot expects enrichResult/compareClusterResult)
