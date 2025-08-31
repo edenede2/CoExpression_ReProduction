@@ -67,6 +67,84 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
   datout
 }
 # ======================= helpers =======================
+.get_col <- function(df, candidates) {
+  for (nm in candidates) if (nm %in% names(df)) return(nm)
+  NA_character_
+}
+
+.first_crossing_beta <- function(df, thr = 0.80, require_nonpos_slope = TRUE) {
+  if (!nrow(df)) return(NA_integer_)
+  r2_col    <- .get_col(df, c("SFT.R.sq", "Rsquared.SFT"))
+  slope_col <- .get_col(df, c("slope", "slope.SFT"))
+  if (is.na(r2_col)) return(NA_integer_)
+  df <- df[order(df$Power), , drop = FALSE]
+  ok <- is.finite(df[[r2_col]]) & df[[r2_col]] >= thr
+  if (require_nonpos_slope && !is.na(slope_col)) {
+    ok <- ok & is.finite(df[[slope_col]]) & (df[[slope_col]] <= 0)
+  }
+  idx <- which(ok)
+  if (length(idx)) as.integer(df$Power[idx[1]]) else NA_integer_
+}
+
+# return named vectors/lists of crossings
+.compute_crossings_from_fit_curves <- function(beta_info, tissues, thr = 0.80, require_nonpos_slope = TRUE) {
+  ts_df <- beta_info$TS_fit_curves
+  ct_df <- beta_info$CT_fit_curves
+
+  # TS crossings per tissue
+  TS_cross <- setNames(rep(NA_integer_, length(tissues)), tissues)
+  if (!is.null(ts_df) && nrow(ts_df)) {
+    for (t in tissues) {
+      cols <- c("Power",
+          .get_col(ts_df, c("SFT.R.sq","Rsquared.SFT")),
+                .get_col(ts_df, c("slope","slope.SFT")))
+      cols <- cols[!is.na(cols) & cols %in% names(ts_df)]
+      sub  <- ts_df[ts_df$tissue == t, cols, drop = FALSE]
+      TS_cross[t] <- .first_crossing_beta(sub, thr = thr, require_nonpos_slope = require_nonpos_slope)
+    }
+  }
+
+  # CT crossings per pair ("A||B" names)
+  CT_cross <- numeric(0)
+  if (!is.null(ct_df) && nrow(ct_df)) {
+    pairs <- unique(ct_df$pair)
+    for (pr in pairs) {
+      cols <- c("Power",
+          .get_col(ct_df, c("Rsquared.SFT","SFT.R.sq")),
+          .get_col(ct_df, c("slope.SFT","slope")))
+      cols <- cols[!is.na(cols) & cols %in% names(ct_df)]
+      sub  <- ct_df[ct_df$pair == pr, cols, drop = FALSE]
+      CT_cross[pr] <- .first_crossing_beta(sub, thr = thr, require_nonpos_slope = require_nonpos_slope)
+    }
+  }
+  list(TS = TS_cross, CT = CT_cross)
+}
+
+# Build beta matrix strictly from *crossings* (diag = TS, off-diag = CT)
+build_beta_matrix_from_crossings <- function(beta_info, tissues, thr = 0.80, require_nonpos_slope = TRUE) {
+  crosses <- .compute_crossings_from_fit_curves(beta_info, tissues, thr, require_nonpos_slope)
+  B <- matrix(NA_real_, nrow = length(tissues), ncol = length(tissues),
+              dimnames = list(tissues, tissues))
+
+  # diag from TS crossings
+  for (t in tissues) B[t, t] <- crosses$TS[[t]]
+
+  # off-diagonals from CT crossings
+  if (!is.null(crosses$CT) && length(crosses$CT)) {
+    for (nm in names(crosses$CT)) {
+      ab <- strsplit(nm, "\\|\\|")[[1]]
+      if (length(ab) != 2) next
+      a <- ab[1]; b <- ab[2]
+      if (a %in% tissues && b %in% tissues) {
+        B[a, b] <- crosses$CT[[nm]]
+        B[b, a] <- crosses$CT[[nm]]
+      }
+    }
+  }
+  B
+}
+
+
 .require_or_stop <- function(pkgs) {
   miss <- pkgs[!vapply(pkgs, requireNamespace, FUN.VALUE = TRUE, quietly = TRUE)]
   if (length(miss)) stop("Missing packages: ", paste(miss, collapse=", "),
@@ -109,53 +187,75 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
 # ======================= 1) Beta series per tissue =======================
 plot_beta_series_pdf <- function(beta_info, tissues, out_file = "plots/beta_series.pdf",
                                  vline_TS = NULL, vline_CT = NULL,
-                                 layout_rows = 4, layout_cols = 2) {
+                                 layout_rows = 4, layout_cols = 2,
+                                 thr = 0.80, require_nonpos_slope = TRUE) {
   dir.create(dirname(out_file), showWarnings = FALSE, recursive = TRUE)
   cols <- .tissue_palette(tissues)
 
   ts_df <- beta_info$TS_fit_curves
   ct_df <- beta_info$CT_fit_curves
 
-  if (!is.null(ct_df) && nrow(ct_df)) {
-    if (!"Power" %in% names(ct_df)) stop("CT_fit_curves must have 'Power'")
-    if (!"pair" %in% names(ct_df)) stop("CT_fit_curves must have 'pair'")
-  }
+  # find first β crossing per TS and per CT pair (R²≥thr & slope≤0)
+  crosses <- .compute_crossings_from_fit_curves(beta_info, tissues, thr, require_nonpos_slope)
+
+  # helpers to extract correct columns
+  .r2_col_ts <- .get_col(ts_df, c("SFT.R.sq","Rsquared.SFT"))
+  .slope_col_ts <- .get_col(ts_df, c("slope","slope.SFT"))
+  .r2_col_ct <- .get_col(ct_df, c("Rsquared.SFT","SFT.R.sq"))
 
   pdf(out_file, height = 9, width = 5)
   on.exit(dev.off(), add = TRUE)
   par(mfrow = c(layout_rows, layout_cols))
 
   for (t in tissues) {
-    ts_t <- ts_df[ts_df$tissue == t, , drop = FALSE]
-    if (!nrow(ts_t)) {
-      plot.new(); title(t)
-      next
-    }
-    ts_t$signed_R2 <- .signed_R2_TS(ts_t)
+    ts_t <- if (!is.null(ts_df) && nrow(ts_df)) ts_df[ts_df$tissue == t, , drop = FALSE] else ts_df[0,]
+    if (!nrow(ts_t)) { plot.new(); title(t); next }
 
-    plot(ts_t$Power, ts_t$signed_R2, type = "l", lwd = 2,
-         ylim = c(0, 1), main = t, xlab = expression(beta), ylab = expression(R^2))
+    # TS line (black)
+    plot(ts_t$Power, ts_t[[.r2_col_ts]], type = "l", lwd = 2, col = "black",
+         ylim = c(0, 1), main = t,
+         xlab = expression(beta), ylab = expression(R^2))
+    points(ts_t$Power, ts_t[[.r2_col_ts]], pch = 16, cex = 0.8, col = "black")
 
+    # add CT partner lines (colored)
     if (!is.null(ct_df) && nrow(ct_df)) {
       keep <- grepl(paste0("^", t, "\\|\\|"), ct_df$pair) | grepl(paste0("\\|\\|", t, "$"), ct_df$pair)
       ct_sub <- ct_df[keep, , drop = FALSE]
       if (nrow(ct_sub)) {
-        partners <- vapply(ct_sub$pair, .ct_partner, character(1), t = t)
-        ct_sub$signed_R2 <- .signed_R2_CT(ct_sub)
+        partners <- vapply(ct_sub$pair, function(p) {
+          ab <- strsplit(p, "\\|\\|")[[1]]; if (ab[1] == t) ab[2] else ab[1]
+        }, character(1))
         split_list <- split(ct_sub, partners)
         for (p in names(split_list)) {
           df <- split_list[[p]]
-          lines(df$Power, df$signed_R2, col = cols[[p]], lwd = 1.5)
+          lines(df$Power, df[[.r2_col_ct]], col = cols[[p]], lwd = 1.5)
+          points(df$Power, df[[.r2_col_ct]], col = cols[[p]], pch = 16, cex = 0.6)
         }
       }
     }
-    if (!is.null(vline_CT)) abline(v = vline_CT, col = "grey", lty = 2)
-    if (!is.null(vline_TS)) abline(v = vline_TS, col = "grey", lty = 1)
+
+    # horizontal line at threshold for visual aid
+    abline(h = thr, col = "grey70", lty = 3)
+
+    # dashed verticals at crossing β*, colored like the curve they belong to
+    b_ts <- crosses$TS[[t]]
+    if (is.finite(b_ts)) abline(v = b_ts, col = "black", lty = 2, lwd = 1.5)
+
+    if (!is.null(ct_df) && nrow(ct_df)) {
+      # for every partner, find the pair β* and color the dashed line with that partner's color
+      partners_all <- unique(unlist(strsplit(names(crosses$CT), "\\|\\|")))
+      partners_all <- setdiff(partners_all, NA_character_)
+      for (p in setdiff(partners_all, t)) {
+        nm1 <- paste0(t, "||", p); nm2 <- paste0(p, "||", t)
+        b_ct <- if (!is.na(crosses$CT[nm1])) crosses$CT[nm1] else crosses$CT[nm2]
+        if (is.finite(b_ct)) abline(v = b_ct, col = cols[[p]], lty = 2, lwd = 1.2)
+      }
+    }
   }
 
-  # לוח קטלוג צבעים
+  # color legend (partners)
   plot(0, 0, type = "n", axes = FALSE, xlab = "", ylab = "")
-  legend("center", legend = tissues, col = cols[tissues], pch = 15, cex = 1.0, ncol = 1, bty = "n")
+  legend("center", legend = tissues, col = cols[tissues], pch = 15, cex = 0.95, ncol = 2, bty = "n")
 }
 
 # ======================= 2) Slope & connectivity summaries =======================
@@ -269,27 +369,46 @@ build_beta_matrix <- function(beta_info, tissues) {
 plot_beta_matrix_heatmap <- function(beta_info, tissues,
                                      out_pdf = "plots/betas_heatmap.pdf",
                                      out_csv = "output/beta_matrix.csv",
+                                     thr = 0.8, require_nonpos_slope = TRUE,
                                      palette_fun = function() grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(9, "Spectral")))(21)) {
   .require_or_stop(c("gplots", "RColorBrewer"))
   dir.create(dirname(out_pdf), showWarnings = FALSE, recursive = TRUE)
   dir.create(dirname(out_csv), showWarnings = FALSE, recursive = TRUE)
 
-  B <- build_beta_matrix(beta_info, tissues)
-  gplots::heatmap.2(B, trace = "none",
-                    col = palette_fun(),
-                    cellnote = round(B, 2), notecol = "black",
-                    margins = c(6,6), key = TRUE, density.info = "none",
-                    main = "Optimal β (TS on diag, CT off-diag)")
-  pdf(out_pdf, width = 5, height = 5); 
-  gplots::heatmap.2(B, trace = "none",
-                    col = palette_fun(),
-                    cellnote = round(B, 2), notecol = "black",
-                    margins = c(6,6), key = TRUE, density.info = "none",
-                    main = "Optimal β (TS on diag, CT off-diag)")
-  dev.off()
+  B <- build_beta_matrix_from_crossings(beta_info, tissues, thr = thr, require_nonpos_slope = require_nonpos_slope)
+  # --- cluster on an imputed copy, plot the original ---
+  if (!any(is.finite(B))) stop("All entries in beta matrix are NA.")
+  B_imp <- B
+  med <- stats::median(B[is.finite(B)], na.rm = TRUE)
+  B_imp[!is.finite(B_imp)] <- med  # simple, safe imputation for clustering
+
+  # precompute dendrograms so heatmap.2 doesn't try to cluster NA's
+  rowv <- as.dendrogram(hclust(dist(B_imp), method = "average"))
+  colv <- as.dendrogram(hclust(dist(t(B_imp)), method = "average"))
+
+  gplots::heatmap.2(
+    B,
+    Rowv = rowv, Colv = colv,      # <- use precomputed trees
+    trace = "none",
+    col = palette_fun(),
+    cellnote = ifelse(is.finite(B), round(B, 2), NA),
+    notecol = "black",
+    margins = c(12, 14),
+    key = TRUE,
+    density.info = "none",
+    main = bquote("First " * beta * " crossing (R"^2 * " ≥ " * .(thr) * ", slope ≤ 0)"),
+    cexRow = 1.0, cexCol = 1.0,
+    srtCol = 45,
+    na.color = "white"
+  )
+  dev.flush()
+
+  # Generate pdf file for the heatmap
+  ggsave(out_pdf, width = 10, height = 8)
 
   write.csv(B, file = out_csv, row.names = TRUE)
   invisible(list(mat = B, pdf = out_pdf, csv = out_csv))
+
 }
 
 make_all_beta_plots <- function(beta_info, tissues,
@@ -297,13 +416,18 @@ make_all_beta_plots <- function(beta_info, tissues,
                                 series_pdf = file.path("plots", paste0(out_prefix, "_beta_series.pdf")),
                                 summaries_pdf = file.path("plots", paste0(out_prefix, "_beta_series_tissue_summaries.pdf")),
                                 heatmap_pdf = file.path("plots", paste0(out_prefix, "_betas_heatmap.pdf")),
-                                heatmap_csv = file.path("output", paste0(out_prefix, "_beta_matrix.csv"))) {
-  vTS <- beta_info$TS_power
-  vCT <- beta_info$CT_power
+                                heatmap_csv = file.path("output", paste0(out_prefix, "_beta_matrix.csv")),
+                                thr = 0.80) {
+  # Per-tissue series PDF (now with dashed β* at crossings, colored)
+  plot_beta_series_pdf(beta_info, tissues, out_file = series_pdf, thr = thr, require_nonpos_slope = TRUE)
 
-  plot_beta_series_pdf(beta_info, tissues, out_file = series_pdf, vline_TS = vTS, vline_CT = vCT)
+  # Summaries (unchanged)
   plot_tissue_summaries_pdf(beta_info, tissues, out_file = summaries_pdf)
-  plot_beta_matrix_heatmap(beta_info, tissues, out_pdf = heatmap_pdf, out_csv = heatmap_csv)
+
+  # Heatmap strictly from crossings, bigger page/margins
+  plot_beta_matrix_heatmap(beta_info, tissues,
+                           out_pdf = heatmap_pdf, out_csv = heatmap_csv,
+                           thr = thr, require_nonpos_slope = TRUE)
 
   message("✓ Plots written:\n  - ", series_pdf,
           "\n  - ", summaries_pdf,
@@ -1274,7 +1398,6 @@ wgcna_pick_CT_new <- function(
     X_B <- .aggregate_by_donor(X_B)
   }
 
-  # יישור דונורים משותפים
   common <- intersect(rownames(X_A), rownames(X_B))
   if (length(common) < min_common) {
     if (verbose) message(sprintf(
@@ -1347,37 +1470,94 @@ wgcna_pick_CT_new <- function(
 }
 # Builds a paired expression matrix (samples-in-common x [genes_A | genes_B])
 # and runs WGCNA::pickSoftThreshold() on it, exactly like the STARNET snippet.
-wgcna_pick_CT <- function(expr_A, expr_B,
-                          aggregate_by_donor = FALSE,
-                          powerVector = seq(0.5, 20, length.out = 20),
-                          TOMType = "unsigned",
-                          cor_method = "pearson",
-                          verbose = 5,
-                          targetR2 = 0.80,
-                          require_neg_slope = TRUE,
-                          min_common = 3L,
-                          ...) {
+# wgcna_pick_CT <- function(expr_A, expr_B,
+#                           aggregate_by_donor = FALSE,
+#                           powerVector = seq(0.5, 20, length.out = 20),
+#                           TOMType = "unsigned",
+#                           cor_method = "pearson",
+#                           verbose = 5,
+#                           targetR2 = 0.80,
+#                           require_neg_slope = TRUE,
+#                           min_common = 3L,
+#                           bicor_maxPOutliers = bicor_maxPOutliers,
+#                           bicor_robustY = bicor_robustY,
+#                           nBreaks = 12,
+#                           removeFirst = TRUE,
+#                           min_common = 3L,
+#                           verbose = 5,
+#                           ...) {
+#   stopifnot(is.matrix(expr_A) || is.data.frame(expr_A))
+#   stopifnot(is.matrix(expr_B) || is.data.frame(expr_B))
+
+#   X_A <- expr_A; X_B <- expr_B
+#   if (aggregate_by_donor) {
+#     X_A <- .aggregate_by_donor(X_A)
+#     X_B <- .aggregate_by_donor(X_B)
+#   }
+
+#   common <- intersect(rownames(X_A), rownames(X_B))
+#   if (length(common) < min_common)
+#     return(list(beta = NA_integer_, sft = NULL,
+#                 fit_df = data.frame(Power = powerVector, SFT.R.sq = NA_real_)))
+
+#   paired <- cbind(X_A[common, , drop = FALSE], X_B[common, , drop = FALSE])
+
+#   corFnc <- if (tolower(cor_method) == "pearson") "cor" else "bicor"
+#   corOptions <- if (identical(corFnc, "cor"))
+#     list(use = "pairwise.complete.obs")
+#   else
+#     list(use = "pairwise.complete.obs", maxPOutliers = 1, robustY = FALSE)
+
+#   sft <- WGCNA::pickSoftThreshold(
+#     data = paired,
+#     powerVector = powerVector,
+#     networkType = .networkType_from_TOMType(TOMType),
+#     corFnc = corFnc,
+#     corOptions = corOptions,
+#     verbose = verbose,
+#     ...
+#   )
+#   chosen <- .wgcna_choose_beta_min_above(sft, targetR2 = targetR2,
+#                                          require_neg_slope = require_neg_slope)
+#   fi <- sft$fitIndices
+#   if (!"SFT.R.sq" %in% names(fi) && "SFT.R.sq" %in% names(sft)) fi$SFT.R.sq <- sft$SFT.R.sq
+#   list(beta = chosen, sft = sft, fit_df = fi)
+# }
+
+wgcna_pick_CT <- function(
+  expr_A, expr_B,
+  aggregate_by_donor = FALSE,
+  powerVector = seq(0.5, 20, length.out = 20),
+  TOMType = "unsigned",
+  cor_method = "pearson",
+  verbose = 5,
+  targetR2 = 0.80,
+  require_neg_slope = TRUE,
+  min_common = 3L,
+  bicor_maxPOutliers = 1,
+  bicor_robustY = FALSE,
+  ...
+){
   stopifnot(is.matrix(expr_A) || is.data.frame(expr_A))
   stopifnot(is.matrix(expr_B) || is.data.frame(expr_B))
 
-  X_A <- expr_A; X_B <- expr_B
-  if (aggregate_by_donor) {
-    X_A <- .aggregate_by_donor(X_A)
-    X_B <- .aggregate_by_donor(X_B)
-  }
+  XA <- expr_A; XB <- expr_B
+  if (aggregate_by_donor) { XA <- .aggregate_by_donor(XA); XB <- .aggregate_by_donor(XB) }
 
-  common <- intersect(rownames(X_A), rownames(X_B))
+  common <- intersect(rownames(XA), rownames(XB))
   if (length(common) < min_common)
     return(list(beta = NA_integer_, sft = NULL,
                 fit_df = data.frame(Power = powerVector, SFT.R.sq = NA_real_)))
 
-  paired <- cbind(X_A[common, , drop = FALSE], X_B[common, , drop = FALSE])
+  paired <- cbind(XA[common, , drop = FALSE], XB[common, , drop = FALSE])
 
   corFnc <- if (tolower(cor_method) == "pearson") "cor" else "bicor"
-  corOptions <- if (identical(corFnc, "cor"))
+  corOptions <- if (identical(corFnc, "cor")) {
     list(use = "pairwise.complete.obs")
-  else
-    list(use = "pairwise.complete.obs", maxPOutliers = 1, robustY = FALSE)
+  } else {
+    list(use = "pairwise.complete.obs",
+         maxPOutliers = bicor_maxPOutliers, robustY = bicor_robustY)
+  }
 
   sft <- WGCNA::pickSoftThreshold(
     data = paired,
@@ -1385,15 +1565,17 @@ wgcna_pick_CT <- function(expr_A, expr_B,
     networkType = .networkType_from_TOMType(TOMType),
     corFnc = corFnc,
     corOptions = corOptions,
-    verbose = verbose,
-    ...
+    verbose = verbose
   )
+
   chosen <- .wgcna_choose_beta_min_above(sft, targetR2 = targetR2,
                                          require_neg_slope = require_neg_slope)
   fi <- sft$fitIndices
   if (!"SFT.R.sq" %in% names(fi) && "SFT.R.sq" %in% names(sft)) fi$SFT.R.sq <- sft$SFT.R.sq
-  list(beta = chosen, sft = sft, fit_df = fi)
+  list(beta = as.integer(chosen), sft = sft, fitIndices = fi, fit_df = fi)
 }
+
+
 
 # --------------------------- Auto picker (TS & CT) ---------------------------
 # Mirrors your current auto_pick_powers() return shape so you can plug it in.
@@ -1536,6 +1718,8 @@ wgcna_auto_pick_powers_new <- function(
     CT_power_map   = CT_power_map
   )
 }
+
+
 wgcna_auto_pick_powers <- function(
   tissue_names,
   tissue_expr_file_names,
@@ -1637,7 +1821,11 @@ wgcna_auto_pick_powers <- function(
           CT_betas <- c(CT_betas, ct_fit$beta)
           CT_power_map[pair_id] <- ct_fit$beta
 
-          fi <- ct_fit$fitIndices
+          fi <- ct_fit$fitIndices %||% ct_fit$fit_df
+          if (!is.null(fi)) {
+            if (!"Rsquared.SFT" %in% names(fi) && "SFT.R.sq" %in% names(fi)) fi$Rsquared.SFT <- fi$SFT.R.sq
+            if (!"slope.SFT"    %in% names(fi) && "slope"    %in% names(fi)) fi$slope.SFT    <- fi$slope
+          }
           # שימור שם העמודה כדי להתאים לפונקציות שרטוט קיימות
           CT_fit_list[[length(CT_fit_list) + 1]] <- data.frame(
             pair = pair_id,
