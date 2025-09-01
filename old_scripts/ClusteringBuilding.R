@@ -1,9 +1,8 @@
 library(WGCNA)
 options(stringsAsFactors = FALSE)
-suppressMessages(WGCNA::allowWGCNAThreads())  # multi-thread WGCNA when available
+suppressMessages(WGCNA::allowWGCNAThreads())  
 .extract_donor <- function(x) sub("^([^-]+-[^-]+).*", "\\1", x)
 
-# Average duplicate samples per donor (rows) within a tissue
 .aggregate_by_donor <- function(mat) {
     d <- .extract_donor(rownames(mat))
     split_idx <- split(seq_len(nrow(mat)), d)
@@ -66,6 +65,8 @@ checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE)
   datout = data.frame(Rsquared.SFT = summary(lm1)$r.squared, slope.SFT = summary(lm1)$coefficients[2, 1], truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared)
   datout
 }
+
+
 # ======================= helpers =======================
 .get_col <- function(df, candidates) {
   for (nm in candidates) if (nm %in% names(df)) return(nm)
@@ -1368,8 +1369,8 @@ wgcna_pick_CT_new <- function(
   expr_A, expr_B,
   aggregate_by_donor = FALSE,
   powerVector = c(1:10, seq(12, 20, 2)),
-  TOMType     = "unsigned",        # "unsigned" | "signed" | "signed hybrid"
-  cor_method  = "pearson",         # "pearson" | "bicor"
+  TOMType     = "unsigned",      
+  cor_method  = "pearson",       
   bicor_maxPOutliers = 1,
   bicor_robustY = FALSE,
   targetR2   = 0.80,
@@ -1402,7 +1403,6 @@ wgcna_pick_CT_new <- function(
   Mi <- X_A[common, , drop = FALSE]
   Mj <- X_B[common, , drop = FALSE]
 
-  # קורלציה בין-רקמתית (genes_A x genes_B)
   if (tolower(cor_method) == "bicor") {
     S <- WGCNA::bicor(Mi, Mj, use = "pairwise.complete.obs",
                       maxPOutliers = bicor_maxPOutliers, robustY = bicor_robustY)
@@ -1411,13 +1411,12 @@ wgcna_pick_CT_new <- function(
   }
   S[!is.finite(S)] <- 0
 
-  # המרת קורלציה ל-adjacency לפי רשת חתומה/לא חתומה
   .adj_from_cor <- function(S, beta, TOMType) {
     tt <- tolower(TOMType)
     if (startsWith(tt, "signed")) {
-      A <- ((S + 1)/2) ^ beta         # שומר סימן (בטווח [0,1])
+      A <- ((S + 1)/2) ^ beta        
     } else {
-      A <- abs(S) ^ beta               # unsigned
+      A <- abs(S) ^ beta             
     }
     A[!is.finite(A)] <- 0
     A
@@ -1436,7 +1435,6 @@ wgcna_pick_CT_new <- function(
   for (ix in seq_along(powerVector)) {
     b <- powerVector[ix]
     A <- .adj_from_cor(S, b, TOMType)
-    # דרגות משני הצדדים (דו-חלקי): שורות = גנים ברקמה A, עמודות = גנים ברקמה B
     k <- c(rowSums(A, na.rm = TRUE), colSums(A, na.rm = TRUE))
     k[!is.finite(k)] <- 0
 
@@ -1451,7 +1449,6 @@ wgcna_pick_CT_new <- function(
     }
   }
 
-  # בחירת β: הנמוך החוצה סף R^2 ובעל שיפוע שלילי (אם מבוקש); אחרת argmax R^2
   ok <- which(!is.na(fit_df$SFT.R.sq) & fit_df$SFT.R.sq >= targetR2)
   if (require_neg_slope) ok <- ok[fit_df$slope[ok] < 0]
   beta_chosen <- if (length(ok)) min(fit_df$Power[ok]) else fit_df$Power[which.max(fit_df$SFT.R.sq)]
@@ -1575,12 +1572,11 @@ wgcna_auto_pick_powers_new <- function(
   sd_quantile = 0.50,
   max_genes_per_tissue = 5000,
   TOMType = "unsigned",
-  cor_method = "pearson",                # "pearson" | "bicor"
+  cor_method = "pearson",              
   powerVector = seq(0.5, 20, length.out = 20),
   targetR2 = 0.80,
   require_neg_slope = TRUE,
   verbose = 5,
-  # ---- CT-specific knobs ----
   aggregate_by_donor_CT = FALSE,
   min_common_CT = 3L,
   ct_nBreaks = 50,
@@ -1671,7 +1667,6 @@ wgcna_auto_pick_powers_new <- function(
           CT_power_map[pair_id] <- ct_fit$beta
 
           fi <- ct_fit$fitIndices
-          # שימור שם העמודה כדי להתאים לפונקציות שרטוט קיימות
           CT_fit_list[[length(CT_fit_list) + 1]] <- data.frame(
             pair = pair_id,
             Power = fi$Power,
@@ -1716,7 +1711,7 @@ wgcna_auto_pick_powers <- function(
   sd_quantile = 0.50,
   max_genes_per_tissue = 5000,
   TOMType = "unsigned",
-  cor_method = "pearson",                # "pearson" | "bicor"
+  cor_method = "pearson",               
   powerVector = seq(0.5, 20, length.out = 20),
   targetR2 = 0.80,
   require_neg_slope = TRUE,
@@ -1816,7 +1811,6 @@ wgcna_auto_pick_powers <- function(
             if (!"Rsquared.SFT" %in% names(fi) && "SFT.R.sq" %in% names(fi)) fi$Rsquared.SFT <- fi$SFT.R.sq
             if (!"slope.SFT"    %in% names(fi) && "slope"    %in% names(fi)) fi$slope.SFT    <- fi$slope
           }
-          # שימור שם העמודה כדי להתאים לפונקציות שרטוט קיימות
           CT_fit_list[[length(CT_fit_list) + 1]] <- data.frame(
             pair = pair_id,
             Power = fi$Power,
@@ -1885,7 +1879,6 @@ wgcna_auto_pick_powers <- function(
   S[!is.finite(S)] <- 0
   A <- S^beta
 
-  # כמו ב-pickSoftThreshold_crossTissue שלך (נרמול ואז rescale)
   k <- c(rowSums(A) / ncol(A), colSums(A) / nrow(A))
   k <- k * min(nrow(A), ncol(A))
   k <- k[is.finite(k) & k > 0]

@@ -38,7 +38,6 @@ map_to_entrez <- function(keys_vec, keytype) {
   if (length(use) > 0) {
     return(AnnotationDbi::select(org.Hs.eg.db, keys = use, columns = "ENTREZID", keytype = keytype))
   }
-  # fallback: try the other common keytype
   alt <- if (identical(keytype, "ENSEMBL")) "SYMBOL" else "ENSEMBL"
   valid_alt <- tryCatch(AnnotationDbi::keys(org.Hs.eg.db, keytype = alt),
                         error = function(e) character())
