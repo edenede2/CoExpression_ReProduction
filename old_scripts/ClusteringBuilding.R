@@ -836,16 +836,6 @@ Clusters_Table <- function(TOM_mat, minClusterSize = 30, plot_heatmap = FALSE, t
     restGenes <- (dynamicColors != "grey")
     message("Plot heatmap", sum(restGenes))
 
-    # flt <- filter_plot_inputs_topVar(TOM_mat, dynamicColors, tissue_names, tissue_expr_file_names, n_top=5000)
-    # restGenes_sub <- (flt$dynamicColors != "grey")
-
-    # network_heatmap_gplots(
-    #   TOM_mat = flt$TOM_mat,
-    #   dynamicColors = flt$dynamicColors,
-    #   restGenes = restGenes_sub,
-    #   out_file = paste0("TOM_heatmap_gplots_", group, ".png"),
-    #   tom_power = 4
-    # )
 
     network_heatmap_WGCNA(
       TOM_mat = TOM_mat,
