@@ -184,6 +184,59 @@ build_beta_matrix_from_crossings <- function(beta_info, tissues, thr = 0.80, req
   if (is.na(slope_col)) return(df[[r2_col]])
   -sign(df[[slope_col]]) * df[[r2_col]]
 }
+# ===== NEW: Fisher-z shrinker for cross-tissue (bipartite) correlations =====
+fisherZ_shrink_bipartite <- function(
+  Mi, Mj,
+  cor_method = "pearson",
+  scheme     = c("to_ref","lambda"),
+  N_ref      = c("median","max"),  # או מספר שלם, למשל 20
+  min_n      = 3L,
+  cap_at_1   = TRUE,               # לא "מגדילים" זוגות עם N>N_ref
+  lambda     = 10,                 # רלוונטי רק ל-"lambda"
+  eps        = 1e-7
+){
+  scheme <- match.arg(scheme)
+  # ספירת תורמים משותפים לכל זוג גנים: n_ij = t(!NA(Mi)) %*% !NA(Mj)
+  Ri <- is.finite(as.matrix(Mi)); Rj <- is.finite(as.matrix(Mj))
+  n_mat <- t(Ri) %*% Rj
+
+  # קורלציות עמודות (גנים) על פני התורמים המשותפים
+  if (tolower(cor_method) == "bicor") {
+    S <- WGCNA::bicor(Mi, Mj, use = "pairwise.complete.obs", maxPOutliers = 1)
+  } else {
+    S <- stats::cor(Mi, Mj, use = "pairwise.complete.obs", method = "pearson")
+  }
+  S[!is.finite(S)] <- 0
+  S <- pmax(pmin(S, 1 - eps), -1 + eps)  # מניעת ±1 מדויק
+
+  Z <- atanh(S)                           # Fisher-z
+  n_ok <- n_mat >= min_n
+
+  if (scheme == "to_ref") {
+    # קביעת N_ref
+    if (length(N_ref) == 1 && is.character(N_ref)) {
+      nn <- as.vector(n_mat[n_ok])
+      if (!length(nn)) return(matrix(0, nrow = ncol(Mi), ncol = ncol(Mj),
+                                     dimnames = list(colnames(Mi), colnames(Mj))))
+      N0 <- if (N_ref[1] == "max") max(nn) else stats::median(nn)
+      N0 <- max(as.integer(round(N0)), min_n + 1L)
+    } else {
+      N0 <- max(as.integer(N_ref[1]), min_n + 1L)
+    }
+    fac <- sqrt(pmax(n_mat - 3, 0) / pmax(N0 - 3, 1))
+    if (cap_at_1) fac <- pmin(fac, 1)
+    Zadj <- Z * fac
+  } else { # "lambda"
+    w <- pmax(n_mat - 3, 0) / (pmax(n_mat - 3, 0) + lambda)
+    Zadj <- Z * w
+  }
+
+  R <- tanh(Zadj)
+  R[!n_ok] <- 0                         # זוגות עם מעט תצפיות → 0 (או NA אם תרצה)
+  R[!is.finite(R)] <- 0
+  dimnames(R) <- list(colnames(Mi), colnames(Mj))
+  R
+}
 
 # ======================= 1) Beta series per tissue =======================
 plot_beta_series_pdf <- function(beta_info, tissues, out_file = "plots/beta_series.pdf",
@@ -387,20 +440,15 @@ plot_beta_matrix_heatmap <- function(beta_info, tissues,
   rowv <- as.dendrogram(hclust(dist(B_imp), method = "average"))
   colv <- as.dendrogram(hclust(dist(t(B_imp)), method = "average"))
 
+  pdf(out_pdf, width = 10, height = 8)
+  on.exit(dev.off(), add = TRUE)
   gplots::heatmap.2(
     B,
-    Rowv = rowv, Colv = colv,      # <- use precomputed trees
-    trace = "none",
-    col = palette_fun(),
-    cellnote = ifelse(is.finite(B), round(B, 2), NA),
-    notecol = "black",
-    margins = c(12, 14),
-    key = TRUE,
-    density.info = "none",
+    Rowv = rowv, Colv = colv, trace = "none",
+    col = palette_fun(), cellnote = ifelse(is.finite(B), round(B, 2), NA),
+    notecol = "black", margins = c(12, 14), key = TRUE, density.info = "none",
     main = bquote("First " * beta * " crossing (R"^2 * " ≥ " * .(thr) * ", slope ≤ 0)"),
-    cexRow = 1.0, cexCol = 1.0,
-    srtCol = 45,
-    na.color = "white"
+    cexRow = 1.0, cexCol = 1.0, srtCol = 45, na.color = "white"
   )
   dev.flush()
 
@@ -519,8 +567,17 @@ AdjacencyFromExpr <- function(
     TS_power_map = NULL,
     CT_power_map = NULL,
     default_TS = 6L,
-    default_CT = 3L
-){
+    default_CT = 3L,
+    ct_fisher = FALSE,
+    ct_fisher_scheme   = c("to_ref","lambda"),
+    ct_fisher_Nref     = c("median","max"),  # או מספר
+    ct_fisher_cap_at_1 = TRUE,
+    ct_fisher_lambda   = 10,
+    ct_min_common      = 3L,
+    ct_too_few_action  = c("stop","zeros")
+) {
+  ct_fisher_scheme  <- match.arg(ct_fisher_scheme)
+  ct_too_few_action <- match.arg(ct_too_few_action)
   stopifnot(length(tissue_names) == length(tissue_expr_file_names))
   T <- length(tissue_names)
   
@@ -561,7 +618,7 @@ AdjacencyFromExpr <- function(
     A[rows, rows] <- Sii^pow_i
   }
   
-  # Cross-tissue blocks (CT) via donor intersection
+    # Cross-tissue blocks (CT) via donor intersection
   if (T >= 2) {
     for (i in 1:(T - 1)) {
       rows <- (idx[i] + 1):idx[i + 1]
@@ -575,32 +632,45 @@ AdjacencyFromExpr <- function(
             as.integer(CT_power_map[pair_ij])
           } else if(!is.na(CT_power_map[pair_ji])){
             as.integer(CT_power_map[pair_ji])
-          } else {
-            default_CT
-          }
-        } else {
-          default_CT
-        }
+          } else default_CT
+        } else default_CT
 
         dj <- rownames(donor_mat[[j]])
         common <- intersect(di, dj)
 
-        if (length(common) < 3) {
-          msg <- sprintf("No/too-few common donors between %s and %s (|common|=%d).",
+        if (length(common) < ct_min_common) {
+          msg <- sprintf("Too few common donors between %s and %s (|common|=%d).",
                          tissue_names[i], tissue_names[j], length(common))
-          stop(msg, " Consider lowering filters or using consensus WGCNA.")
-          
+          if (ct_too_few_action == "stop") stop(msg)
+          # "zeros": משאירים את הבלוק בריבוע אפסים וממשיכים
+          next
         }
 
         Mi <- donor_mat[[i]][common, , drop = FALSE]
         Mj <- donor_mat[[j]][common, , drop = FALSE]
-        Sij <- abs(cor(Mi, Mj, use = "pairwise.complete.obs", method = cor_method))
-        C <- Sij^pow_ij
+
+        if (ct_fisher) {
+          Sij <- fisherZ_shrink_bipartite(
+            Mi, Mj,
+            cor_method = cor_method,
+            scheme     = ct_fisher_scheme,
+            N_ref      = ct_fisher_Nref,
+            min_n      = ct_min_common,
+            cap_at_1   = ct_fisher_cap_at_1,
+            lambda     = ct_fisher_lambda
+          )
+        } else {
+          Sij <- stats::cor(Mi, Mj, use = "pairwise.complete.obs", method = cor_method)
+          Sij[!is.finite(Sij)] <- 0
+        }
+
+        C <- abs(Sij) ^ pow_ij
         A[rows, cols] <- C
         A[cols, rows] <- t(C)
       }
     }
   }
+
 
   saveRDS(A, "adj_mat.rds")
   A
@@ -992,51 +1062,42 @@ pickSoftThreshold_crossTissue <- function(
   unsigned    = TRUE,
   nBreaks     = 10,
   removeFirst = TRUE,
-  use_signed_R2 = FALSE
+  use_signed_R2 = FALSE,
+  fisher       = FALSE,
+  fisher_scheme= c("to_ref","lambda"),
+  fisher_Nref  = c("median","max"),
+  fisher_cap   = TRUE,
+  fisher_lambda= 10,
+  min_common   = 3L
 ){
+  fisher_scheme <- match.arg(fisher_scheme)
   stopifnot(nrow(Mi) == nrow(Mj))
-  S <- .cor_mat_CT(Mi, Mj, cor_method)
+  
+  S <- if (fisher) {
+    fisherZ_shrink_bipartite(
+      Mi, Mj, cor_method = cor_method,
+      scheme = fisher_scheme, N_ref = fisher_Nref,
+      min_n = min_common, cap_at_1 = fisher_cap, lambda = fisher_lambda
+    )
+  } else {
+    .cor_mat_CT(Mi, Mj, cor_method)
+  }
   if (unsigned) S <- abs(S)
 
-  fit_df <- data.frame(
-    Power    = powerVector,
-    SFT.R.sq = NA_real_,
-    slope    = NA_real_,
-    mean.k   = NA_real_,
-    median.k = NA_real_,
-    max.k    = NA_real_,
-    stringsAsFactors = FALSE
-  )
-
+  fit_df <- data.frame(Power=powerVector, SFT.R.sq=NA_real_, slope=NA_real_,
+                       mean.k=NA_real_, median.k=NA_real_, max.k=NA_real_,
+                       stringsAsFactors = FALSE)
   for (ix in seq_along(powerVector)) {
     b <- powerVector[ix]
     B <- S ^ b
-    B[!is.finite(B)] <- 0
-    # k <- c(rowSums(B), colSums(B))
-    k <- c(rowSums(B) / ncol(B), colSums(B) / nrow(B))  # normalize by number of genes in other tissue
-    k <- k * min(nrow(B), ncol(B))  # rescale to original scale
-    k[!is.finite(k)] <- 0
-
-    # rmFirst <- removeFirst || (.first_bin_mass(k, nBreaks) > 0.4)
-    prop_zero <- mean(k < 1e-6, na.rm=TRUE)
-    message(sprintf("[β=%a] mean(k)=%.3f, median(k)=%.3f, max(k)=%.3f, zeros=%.1f%%\n",
-              b, mean(k), median(k), max(k), 100*prop_zero))
+    k <- c(rowSums(B), colSums(B))
     cf <- checkScaleFree_logbin(k, nBreaks = nBreaks, removeFirst = removeFirst)
-    r2    <- cf$Rsquared.SFT[1]
-    slope <- cf$slope.SFT[1]
-
-    fit_df$slope[ix]    <- slope
-    fit_df$SFT.R.sq[ix] <- if (use_signed_R2) sign(slope) * r2 else r2
-    fit_df$mean.k[ix]   <- mean(k)
-    fit_df$median.k[ix] <- stats::median(k)
-    fit_df$max.k[ix]    <- max(k)
-    prop_zero <- mean(k < 1e-6, na.rm=TRUE)
-    message(sprintf("[β=%a] mean(k)=%.3f, median(k)=%.3f, max(k)=%.3f, zeros=%.1f%%\n",
-              b, mean(k), median(k), max(k), 100*prop_zero))
+    fit_df$slope[ix]    <- cf$slope.SFT[1]
+    fit_df$SFT.R.sq[ix] <- if (use_signed_R2) sign(cf$slope.SFT[1]) * cf$Rsquared.SFT[1] else cf$Rsquared.SFT[1]
+    fit_df$mean.k[ix]   <- mean(k); fit_df$median.k[ix] <- stats::median(k); fit_df$max.k[ix] <- max(k)
   }
   list(fitIndices = fit_df)
 }
-
 
 # =============================== auto_pick_powers ===============================
 .choose_power_from_pickSoft <- function(sft, targetR2 = 0.80) {
@@ -1134,6 +1195,7 @@ auto_pick_powers <- function(
         Mi <- donors_list[[i]][common, , drop = FALSE]
         Mj <- donors_list[[j]][common, , drop = FALSE]
 
+        # בתוך הלולאה של CT ב-auto_pick_powers():
         sft_ct <- tryCatch(
           pickSoftThreshold_crossTissue(
             Mi, Mj,
@@ -1142,10 +1204,17 @@ auto_pick_powers <- function(
             unsigned      = unsigned,
             nBreaks       = nBreaks,
             removeFirst   = removeFirst,
-            use_signed_R2 = use_signed_R2_CT
+            use_signed_R2 = use_signed_R2_CT,
+            fisher        = ct_fisher,                 # <-- NEW
+            fisher_scheme = ct_fisher_scheme,
+            fisher_Nref   = ct_fisher_Nref,
+            fisher_cap    = ct_fisher_cap_at_1,
+            fisher_lambda = ct_fisher_lambda,
+            min_common    = ct_min_common
           ),
           error = function(e) { message("[CT beta pick] ", pair_id, " error: ", e$message); NULL }
         )
+
 
         if (!is.null(sft_ct)) {
           best_beta <- .choose_power_from_pickSoft(sft_ct, targetR2 = targetR2)
@@ -1369,8 +1438,8 @@ wgcna_pick_CT_new <- function(
   expr_A, expr_B,
   aggregate_by_donor = FALSE,
   powerVector = c(1:10, seq(12, 20, 2)),
-  TOMType     = "unsigned",      
-  cor_method  = "pearson",       
+  TOMType     = "unsigned",
+  cor_method  = "pearson",
   bicor_maxPOutliers = 1,
   bicor_robustY = FALSE,
   targetR2   = 0.80,
@@ -1378,21 +1447,25 @@ wgcna_pick_CT_new <- function(
   nBreaks    = 50,
   removeFirst = TRUE,
   min_common = 3L,
-  verbose    = 1
+  verbose    = 1,
+  # ---- NEW: Fisher controls ----
+  fisher        = FALSE,
+  fisher_scheme = c("to_ref","lambda"),
+  fisher_Nref   = c("median","max"),
+  fisher_cap    = TRUE,
+  fisher_lambda = 10
 ){
+  fisher_scheme <- match.arg(fisher_scheme)
+
   stopifnot(is.matrix(expr_A) || is.data.frame(expr_A))
   stopifnot(is.matrix(expr_B) || is.data.frame(expr_B))
   X_A <- expr_A; X_B <- expr_B
 
-  if (aggregate_by_donor) {
-    X_A <- .aggregate_by_donor(X_A)
-    X_B <- .aggregate_by_donor(X_B)
-  }
+  if (aggregate_by_donor) { X_A <- .aggregate_by_donor(X_A); X_B <- .aggregate_by_donor(X_B) }
 
   common <- intersect(rownames(X_A), rownames(X_B))
   if (length(common) < min_common) {
-    if (verbose) message(sprintf(
-      "[wgcna_pick_CT] Too few common donors: %d < %d", length(common), min_common))
+    if (verbose) message(sprintf("[wgcna_pick_CT] Too few common donors: %d < %d", length(common), min_common))
     return(list(
       beta = NA_integer_,
       fitIndices = data.frame(Power = powerVector, SFT.R.sq = NA_real_,
@@ -1403,50 +1476,44 @@ wgcna_pick_CT_new <- function(
   Mi <- X_A[common, , drop = FALSE]
   Mj <- X_B[common, , drop = FALSE]
 
-  if (tolower(cor_method) == "bicor") {
-    S <- WGCNA::bicor(Mi, Mj, use = "pairwise.complete.obs",
-                      maxPOutliers = bicor_maxPOutliers, robustY = bicor_robustY)
+  # ---- NEW: Fisher-z shrinker when requested ----
+  if (isTRUE(fisher)) {
+    S <- fisherZ_shrink_bipartite(
+      Mi, Mj,
+      cor_method = cor_method,
+      scheme     = fisher_scheme,
+      N_ref      = fisher_Nref,
+      min_n      = min_common,
+      cap_at_1   = fisher_cap,
+      lambda     = fisher_lambda
+    )
   } else {
-    S <- stats::cor(Mi, Mj, use = "pairwise.complete.obs", method = "pearson")
+    if (tolower(cor_method) == "bicor") {
+      S <- WGCNA::bicor(Mi, Mj, use = "pairwise.complete.obs",
+                        maxPOutliers = bicor_maxPOutliers, robustY = bicor_robustY)
+    } else {
+      S <- stats::cor(Mi, Mj, use = "pairwise.complete.obs", method = "pearson")
+    }
   }
   S[!is.finite(S)] <- 0
 
   .adj_from_cor <- function(S, beta, TOMType) {
     tt <- tolower(TOMType)
-    if (startsWith(tt, "signed")) {
-      A <- ((S + 1)/2) ^ beta        
-    } else {
-      A <- abs(S) ^ beta             
-    }
-    A[!is.finite(A)] <- 0
-    A
+    if (startsWith(tt, "signed")) ((S + 1)/2) ^ beta else abs(S) ^ beta
   }
 
-  fit_df <- data.frame(
-    Power    = powerVector,
-    SFT.R.sq = NA_real_,
-    slope    = NA_real_,
-    mean.k   = NA_real_,
-    median.k = NA_real_,
-    max.k    = NA_real_,
-    stringsAsFactors = FALSE
-  )
-
+  fit_df <- data.frame(Power=powerVector, SFT.R.sq=NA_real_, slope=NA_real_,
+                       mean.k=NA_real_, median.k=NA_real_, max.k=NA_real_,
+                       stringsAsFactors = FALSE)
   for (ix in seq_along(powerVector)) {
     b <- powerVector[ix]
     A <- .adj_from_cor(S, b, TOMType)
     k <- c(rowSums(A, na.rm = TRUE), colSums(A, na.rm = TRUE))
     k[!is.finite(k)] <- 0
-
     sf <- WGCNA::scaleFreeFitIndex(k, nBreaks = nBreaks, removeFirst = removeFirst)
     fit_df$SFT.R.sq[ix] <- sf$Rsquared.SFT
     fit_df$slope[ix]    <- sf$slope.SFT
-    fit_df$mean.k[ix]   <- mean(k)
-    fit_df$median.k[ix] <- stats::median(k)
-    fit_df$max.k[ix]    <- max(k)
-    if (verbose > 1) {
-      message(sprintf("[β=%s] R2=%.3f, slope=%.3f, mean(k)=%.2f", b, sf$Rsquared.SFT, sf$slope.SFT, mean(k)))
-    }
+    fit_df$mean.k[ix]   <- mean(k); fit_df$median.k[ix] <- stats::median(k); fit_df$max.k[ix] <- max(k)
   }
 
   ok <- which(!is.na(fit_df$SFT.R.sq) & fit_df$SFT.R.sq >= targetR2)
@@ -1567,132 +1634,104 @@ wgcna_pick_CT <- function(
 # --------------------------- Auto picker (TS & CT) ---------------------------
 # Mirrors your current auto_pick_powers() return shape so you can plug it in.
 wgcna_auto_pick_powers_new <- function(
- tissue_names,
-  tissue_expr_file_names,
-  sd_quantile = 0.50,
-  max_genes_per_tissue = 5000,
-  TOMType = "unsigned",
-  cor_method = "pearson",              
+  tissue_names, tissue_expr_file_names,
+  sd_quantile = 0.50, max_genes_per_tissue = 5000,
+  TOMType = "unsigned", cor_method = "pearson",
   powerVector = seq(0.5, 20, length.out = 20),
-  targetR2 = 0.80,
-  require_neg_slope = TRUE,
-  verbose = 5,
-  aggregate_by_donor_CT = FALSE,
-  min_common_CT = 3L,
-  ct_nBreaks = 50,
-  ct_removeFirst = TRUE,
-  bicor_maxPOutliers = 1,
-  bicor_robustY = FALSE
-) {
+  targetR2 = 0.80, require_neg_slope = TRUE, verbose = 5,
+  aggregate_by_donor_CT = FALSE, min_common_CT = 3L,
+  ct_nBreaks = 50, ct_removeFirst = TRUE,
+  bicor_maxPOutliers = 1, bicor_robustY = FALSE,
+  # ---- NEW: Fisher passthrough ----
+  ct_fisher = FALSE,
+  ct_fisher_scheme = c("to_ref","lambda"),
+  ct_fisher_Nref = c("median","max"),
+  ct_fisher_cap_at_1 = TRUE,
+  ct_fisher_lambda = 10
+){
+  ct_fisher_scheme <- match.arg(ct_fisher_scheme)
   stopifnot(length(tissue_names) == length(tissue_expr_file_names))
   T <- length(tissue_names)
 
-  # Load & prefilter expression per tissue (samples x genes)
-  expr_list <- vector("list", T)
-  names(expr_list) <- tissue_names
-  message("Loading expression data for ", T, " tissues…")
+  expr_list <- setNames(vector("list", T), tissue_names)
   for (i in seq_len(T)) {
-    X <- LoadExprData(
-      tissue_name = tissue_names[i],
-      tissue_file_name = tissue_expr_file_names[i],
-      sd_quantile = sd_quantile,
-      max_genes_per_tissue = max_genes_per_tissue
-    )
-    expr_list[[i]] <- X
+    expr_list[[i]] <- LoadExprData(tissue_names[i], tissue_expr_file_names[i],
+                                   sd_quantile = sd_quantile,
+                                   max_genes_per_tissue = max_genes_per_tissue)
   }
 
-  # ---- TS per tissue ----
+  # ---------- TS ----------
   TS_per_tissue <- integer(T)
   TS_power_map  <- setNames(integer(T), tissue_names)
   TS_fit_curves <- vector("list", T)
-
   for (i in seq_len(T)) {
     ts_fit <- tryCatch(
-      wgcna_pick_TS(
-        expr_mat          = expr_list[[i]],
-        powerVector       = powerVector,
-        TOMType           = TOMType,
-        cor_method        = cor_method,
-        verbose           = verbose,
-        targetR2          = targetR2,
-        require_neg_slope = require_neg_slope
-      ),
+      wgcna_pick_TS(expr_mat = expr_list[[i]], powerVector = powerVector,
+                    TOMType = TOMType, cor_method = cor_method,
+                    verbose = verbose, targetR2 = targetR2,
+                    require_neg_slope = require_neg_slope),
       error = function(e) { message("[TS] ", tissue_names[i], ": ", e$message); NULL }
     )
     if (!is.null(ts_fit)) {
       TS_per_tissue[i] <- ts_fit$beta
-      fi <- ts_fit$fit_df
-      fi$tissue <- tissue_names[i]
+      fi <- ts_fit$fit_df; fi$tissue <- tissue_names[i]
       TS_fit_curves[[i]] <- fi
     } else {
       TS_per_tissue[i] <- NA_integer_
-      TS_fit_curves[[i]] <- data.frame(Power = powerVector, SFT.R.sq = NA_real_,
-                                       tissue = tissue_names[i])
+      TS_fit_curves[[i]] <- data.frame(Power = powerVector, SFT.R.sq = NA_real_, tissue = tissue_names[i])
     }
     TS_power_map[tissue_names[i]] <- TS_per_tissue[i]
   }
   TS_power <- as.integer(stats::median(TS_per_tissue, na.rm = TRUE))
   TS_fit_curves_df <- do.call(rbind, TS_fit_curves)
 
-  # ---- CT per pair (using the NEW wgcna_pick_CT) ----
-  CT_betas <- integer(0)
-  CT_power_map <- numeric(0)
-  CT_fit_list <- list()
-
+  # ---------- CT ----------
+  CT_betas <- integer(0); CT_power_map <- numeric(0); CT_fit_list <- list()
   if (T >= 2) {
-    for (i in 1:(T - 1)) {
-      for (j in (i + 1):T) {
-        pair_id <- paste(tissue_names[i], tissue_names[j], sep = "||")
-        ct_fit <- tryCatch(
-          wgcna_pick_CT_new(
-            expr_A = expr_list[[i]], expr_B = expr_list[[j]],
-            aggregate_by_donor = aggregate_by_donor_CT,
-            powerVector = powerVector,
-            TOMType     = TOMType,
-            cor_method  = cor_method,
-            bicor_maxPOutliers = bicor_maxPOutliers,
-            bicor_robustY      = bicor_robustY,
-            targetR2    = targetR2,
-            require_neg_slope = require_neg_slope,
-            nBreaks     = ct_nBreaks,
-            removeFirst = ct_removeFirst,
-            min_common  = min_common_CT,
-            verbose     = verbose
-          ),
-          error = function(e) { message("[CT] ", pair_id, ": ", e$message); NULL }
+    for (i in 1:(T - 1)) for (j in (i + 1):T) {
+      pair_id <- paste(tissue_names[i], tissue_names[j], sep = "||")
+      ct_fit <- tryCatch(
+        wgcna_pick_CT_new(
+          expr_A = expr_list[[i]], expr_B = expr_list[[j]],
+          aggregate_by_donor = aggregate_by_donor_CT,
+          powerVector = powerVector, TOMType = TOMType, cor_method = cor_method,
+          bicor_maxPOutliers = bicor_maxPOutliers, bicor_robustY = bicor_robustY,
+          targetR2 = targetR2, require_neg_slope = require_neg_slope,
+          nBreaks = ct_nBreaks, removeFirst = ct_removeFirst,
+          min_common = min_common_CT, verbose = verbose,
+          # ---- NEW: pass Fisher ----
+          fisher = ct_fisher, fisher_scheme = ct_fisher_scheme,
+          fisher_Nref = ct_fisher_Nref, fisher_cap = ct_fisher_cap_at_1,
+          fisher_lambda = ct_fisher_lambda
+        ),
+        error = function(e) { message("[CT] ", pair_id, ": ", e$message); NULL }
+      )
+      if (!is.null(ct_fit) && !is.na(ct_fit$beta)) {
+        CT_betas <- c(CT_betas, ct_fit$beta)
+        CT_power_map[pair_id] <- ct_fit$beta
+        fi <- ct_fit$fitIndices
+        CT_fit_list[[length(CT_fit_list) + 1]] <- data.frame(
+          pair = pair_id,
+          Power = fi$Power,
+          Rsquared.SFT = fi$SFT.R.sq,
+          slope.SFT    = if ("slope" %in% names(fi)) fi$slope else fi$slope.SFT,
+          mean.k = fi$mean.k, median.k = fi$median.k, max.k = fi$max.k,
+          stringsAsFactors = FALSE
         )
-
-        if (!is.null(ct_fit) && !is.na(ct_fit$beta)) {
-          CT_betas <- c(CT_betas, ct_fit$beta)
-          CT_power_map[pair_id] <- ct_fit$beta
-
-          fi <- ct_fit$fitIndices
-          CT_fit_list[[length(CT_fit_list) + 1]] <- data.frame(
-            pair = pair_id,
-            Power = fi$Power,
-            Rsquared.SFT = fi$SFT.R.sq,
-            slope.SFT    = if ("slope" %in% names(fi)) fi$slope else fi$slope.SFT,
-            mean.k       = fi$mean.k,
-            median.k     = fi$median.k,
-            max.k        = fi$max.k,
-            stringsAsFactors = FALSE
-          )
-        } else {
-          CT_fit_list[[length(CT_fit_list) + 1]] <-
-            data.frame(pair = pair_id, Power = powerVector,
-                       Rsquared.SFT = NA_real_, slope.SFT = NA_real_,
-                       mean.k = NA_real_, median.k = NA_real_, max.k = NA_real_)
-        }
+      } else {
+        CT_fit_list[[length(CT_fit_list) + 1]] <-
+          data.frame(pair = pair_id, Power = powerVector,
+                     Rsquared.SFT = NA_real_, slope.SFT = NA_real_,
+                     mean.k = NA_real_, median.k = NA_real_, max.k = NA_real_)
       }
     }
   }
-
   CT_power <- if (length(CT_betas)) as.integer(stats::median(CT_betas, na.rm = TRUE)) else 3L
   CT_fit_curves_df <- if (length(CT_fit_list)) do.call(rbind, CT_fit_list) else
     data.frame(pair = character(), Power = numeric(), Rsquared.SFT = numeric())
 
   list(
-    method         = "wgcna+scaleFreeFitIndex(CT)",
+    method         = "wgcna_new + Fisher(optional)",
     TS_power       = TS_power,
     CT_power       = CT_power,
     TS_per_tissue  = TS_per_tissue,
@@ -2331,8 +2370,17 @@ XWGCNA_Clusters_autoBeta <- function(
     group = "young",
     scaleFree_plots = "all",
     scaleFree_nBreaks = 12,
-    scaleFree_removeFirst = TRUE
+    scaleFree_removeFirst = TRUE,
+    ct_fisher = TRUE,
+    ct_fisher_scheme = c("to_ref","lambda"),
+    ct_fisher_Nref = c("median","max"),
+    ct_fisher_cap_at_1 = TRUE,
+    ct_fisher_lambda = 10,
+    ct_min_common = 3L,
+    ct_too_few_action = c("stop","zeros")
 ){
+    ct_fisher_scheme  <- match.arg(ct_fisher_scheme)
+    ct_too_few_action <- match.arg(ct_too_few_action)
     stopifnot(length(tissue_names) == length(tissue_expr_file_names))
 
     TS_map <- NULL
@@ -2352,8 +2400,14 @@ XWGCNA_Clusters_autoBeta <- function(
           require_neg_slope = TRUE,
           verbose = 5,
           aggregate_by_donor_CT = aggregate_by_donor_CT,
-          min_common_CT = 3L,
-          ct_nBreaks = 12
+          min_common_CT = ct_min_common,
+          ct_nBreaks = 12,
+          # ---- NEW: pass Fisher flags so בחירת β ב-CT תהיה עקבית עם הבנייה ----
+          ct_fisher = ct_fisher,
+          ct_fisher_scheme = ct_fisher_scheme,
+          ct_fisher_Nref = ct_fisher_Nref,
+          ct_fisher_cap_at_1 = ct_fisher_cap_at_1,
+          ct_fisher_lambda = ct_fisher_lambda
         )
       } else if (beta_method == "wgcna") {
         message("Auto-picking TS/CT betas (WGCNA)…")
@@ -2433,7 +2487,14 @@ XWGCNA_Clusters_autoBeta <- function(
         TS_power_map = TS_map,
         CT_power_map = CT_map,
         default_TS = TS_power,
-        default_CT = CT_power
+        default_CT = CT_power,
+        ct_fisher = ct_fisher,
+        ct_fisher_scheme = ct_fisher_scheme,
+        ct_fisher_Nref = ct_fisher_Nref,
+        ct_fisher_cap = ct_fisher_cap_at_1,
+        ct_fisher_lambda = ct_fisher_lambda,
+        ct_min_common = ct_min_common,
+        ct_too_few_action = ct_too_few_action
     )
   
     if (save_intermediates) {
