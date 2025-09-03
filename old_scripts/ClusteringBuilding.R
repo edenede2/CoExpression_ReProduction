@@ -1122,7 +1122,13 @@ auto_pick_powers <- function(
   nBreaks         = 10,
   removeFirst     = TRUE,
   use_signed_R2_TS = FALSE,
-  use_signed_R2_CT = FALSE
+  use_signed_R2_CT = FALSE,
+  ct_fisher = FALSE,
+  ct_fisher_scheme = "to_ref",
+  ct_fisher_Nref = "median",
+  ct_fisher_cap_at_1 = TRUE,
+  ct_fisher_lambda = 10,
+  ct_min_common = 3L
 ){
   stopifnot(length(tissue_names) == length(tissue_expr_file_names))
   T <- length(tissue_names)
