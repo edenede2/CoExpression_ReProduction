@@ -170,7 +170,7 @@ enrichmentKegg = function(modules) {
     organism = "hsa",
     keyType = "ncbi-geneid",
     pvalueCutoff = 1,
-    qvalueCutoff = 1
+    qvalueCutoff = 0.05
   )
   setReadable(kegg_enrich, OrgDb = org.Hs.eg.db, keyType="ENTREZID")
 
@@ -207,38 +207,38 @@ go_tab = data.frame(
 
 
 write.table(kegg_enrich@compareClusterResult,
-            "kegg_rosmap_full1.csv",
+            "kegg_rosmap_full2.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$BP$enrichment,
-            "go_bp_tab_rosmap_full1.csv",
+            "go_bp_tab_rosmap_full2.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$CC$enrichment,
-            "go_cc_tab_rosmap_full1.csv",
+            "go_cc_tab_rosmap_full2.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$MF$enrichment,
-            "go_mf_tab_rosmap_full1.csv",
+            "go_mf_tab_rosmap_full2.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 
 write.table(go_enrich_filter$enrichmentP,
-            "go_pmat_rosmap_full1.tsv",
+            "go_pmat_rosmap_full2.tsv",
             sep="\t")
 
 # Save top GO terms per module summary
 write.table(
   go_tab,
-  "go_top_terms_rosmap_full1.csv",
+  "go_top_terms_rosmap_full2.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE
