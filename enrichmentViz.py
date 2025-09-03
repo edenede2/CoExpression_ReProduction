@@ -841,22 +841,22 @@ def _cluster_orders(logp_df, row_meta,
 
 if __name__ == "__main__":
 
-    KEGG_CSV = r"/Users/edeneldar/CoExpression_ReProduction/kegg_rosmap_full1.csv"
+    KEGG_CSV = r"/Users/edeneldar/Downloads/kegg_rosmap_full_V4.csv"
 
-    MODULES = "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/Shared drives/is-SomekhLab/inter_tissue_coexpression/proccessed_data/ROSMAP_full_outputs/xwgcna_rosmap_autobeta_run4_Cluster_details.tsv"
+    MODULES = "/Users/edeneldar/Downloads/tryRosmap_Cluster_details3.tsv"
 
     palette_cat, palette_sub = build_annotation_palettes_from_kegg(KEGG_CSV)
 
     fig, ts_rows, ts_cols, ct_rows, ct_cols = export_kegg_ts_ct_enrichment_pdf(
         kegg_long_csv=KEGG_CSV,
         modules_details_tsv=MODULES,
-        pdf_path="kegg_TS_CT_enrichment_between_no_one_category121131.pdf",
+        pdf_path="kegg_TS_CT_enrichment_between_V4.pdf",
         selection="global_top", K_GLOBAL=99999999, cap=4.0,
-        cluster_cols=True, cluster_rows=True, row_grouping=(['category']),
+        cluster_cols=True, cluster_rows=True, row_grouping=(None),
         add_hist=True,
         hist_stacked_regions=True,
-        hist_regions_cols=(["AC","MF","PCG"]),
-        hist_region_colors={"AC":"#88CCEE","MF":"#CC6677","PCG":"#DDCC77"},
+        hist_regions_cols=(["AC","MFBA9BA46","PCGBA23"]),
+        hist_region_colors={"AC":"#88CCEE","MFBA9BA46":"#CC6677","PCGBA23":"#DDCC77"},
         palette_cat=palette_cat, palette_sub=palette_sub,
         build_matrix_fn=build_kegg_logp_matrix,
         ts_exclude_modules=[],            # ← לדוגמה: להסיר מודולים מה-TS
