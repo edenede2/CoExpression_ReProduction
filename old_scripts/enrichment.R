@@ -11,10 +11,16 @@ library(AnnotationDbi)
 normalize_gene_ids <- function(x) {
   x <- as.character(x)
   x <- trimws(x)
-  # drop Ensembl version suffix
-  sub("\\.\\d+$", "", x)
-}
 
+  # שליפת מזהה ENSG אם קיים בכל מקום במחרוזת (עם/בלי גרסה)
+  m <- regexpr("ENSG\\d+(?:\\.\\d+)?", x, perl = TRUE)
+  ens <- rep(NA_character_, length(x))
+  ens[m > 0] <- regmatches(x, m)
+
+  # אם נמצא ENSG – הסר גרסת Ensembl (".15" וכו'); אחרת החזר את הטקסט המקורי
+  out <- ifelse(!is.na(ens), sub("\\.\\d+$", "", ens), x)
+  out
+}
 guess_keytype_and_keys <- function(ids) {
   ids <- normalize_gene_ids(ids)
   is_ensg <- grepl("^ENSG\\d+", ids)
@@ -201,38 +207,38 @@ go_tab = data.frame(
 
 
 write.table(kegg_enrich@compareClusterResult,
-            "kegg_rosmap_full.csv",
+            "kegg_rosmap_full1.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$BP$enrichment,
-            "go_bp_tab_rosmap_full.csv",
+            "go_bp_tab_rosmap_full1.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$CC$enrichment,
-            "go_cc_tab_rosmap_full.csv",
+            "go_cc_tab_rosmap_full1.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$MF$enrichment,
-            "go_mf_tab_rosmap_full.csv",
+            "go_mf_tab_rosmap_full1.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 
 write.table(go_enrich_filter$enrichmentP,
-            "go_pmat_rosmap_full.tsv",
+            "go_pmat_rosmap_full1.tsv",
             sep="\t")
 
 # Save top GO terms per module summary
 write.table(
   go_tab,
-  "go_top_terms_rosmap_full.csv",
+  "go_top_terms_rosmap_full1.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE
@@ -271,7 +277,7 @@ go_tab2 <- data.frame(
 
 write.table(
   kegg_enrich2@compareClusterResult,
-  "kegg_rosmap_5000.csv",
+  "kegg_rosmap_50001.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE
@@ -279,7 +285,7 @@ write.table(
 
 write.table(
   go_enrich_filter2$bestPTerms$BP$enrichment,
-  "go_bp_tab_rosmap_5000.csv",
+  "go_bp_tab_rosmap_50001.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE
@@ -287,7 +293,7 @@ write.table(
 
 write.table(
   go_enrich_filter2$bestPTerms$CC$enrichment,
-  "go_cc_tab_rosmap_5000.csv",
+  "go_cc_tab_rosmap_50001.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE
@@ -295,7 +301,7 @@ write.table(
 
 write.table(
   go_enrich_filter2$bestPTerms$MF$enrichment,
-  "go_mf_tab_rosmap_5000.csv",
+  "go_mf_tab_rosmap_50001.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE
@@ -303,14 +309,14 @@ write.table(
 
 write.table(
   go_enrich_filter2$enrichmentP,
-  "go_pmat_rosmap_5000.tsv",
+  "go_pmat_rosmap_50001.tsv",
   sep = "\t"
 )
 
 # Save top GO terms per module summary for second run
 write.table(
   go_tab2,
-  "go_top_terms_rosmap_5000.csv",
+  "go_top_terms_rosmap_50001.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE
