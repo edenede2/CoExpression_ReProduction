@@ -13,7 +13,12 @@ suppressMessages(WGCNA::allowWGCNAThreads())
     storage.mode(res) <- "double"
     res
 }
-
+split_gene_id <- function(x) {
+  x <- as.character(x)
+  tissue <- sub("_([^_]*)$", "", x)  # הכל עד ה-underscore האחרון
+  gene   <- sub("^.*_", "", x)       # מה שאחרי ה-underscore האחרון
+  list(tissue = tissue, gene = gene)
+}
 .make_CT_map <- function(tissues, beta) {
   if (length(tissues) < 2) return(setNames(numeric(0), character(0)))
   pairs <- t(combn(tissues, 2))
@@ -483,50 +488,59 @@ make_all_beta_plots <- function(beta_info, tissues,
           "\n  - ", heatmap_pdf,
           "\n✓ Beta matrix CSV: ", heatmap_csv)
 }
-
 R2_connectivity <- function(adj_mat) {
-  #--------------------------For scale Free-----------------------------
+  # ----- Scale-free על כל הגרף -----
   k <- rowSums(adj_mat)
   r2 <- checkScaleFree_logbin(k)$Rsquared.SFT
   r2_conn <- list(r2=r2, mean_conn=mean(k), median_conn=median(k), max_conn=max(k), min_conn=min(k))
-  
-  #------------------For connectons-----------------------
-  tissue_indexed <- c(0, as.numeric(table(unlist(lapply(strsplit(colnames(adj_mat), split = '_'), function(x) {return(x[1])})))))
-  for(i in 2:length(tissue_indexed)) tissue_indexed[i] <- tissue_indexed[i] <- sum(tissue_indexed[i:(i-1)])
-  
-  TS_conn_mat <- matrix(NA, nrow=(length(tissue_indexed)-1), ncol=4)
-  colnames(TS_conn_mat) <- c('mean', 'median', 'max', 'min')
-  
-  CT_conn_mat <- matrix(NA, nrow=((((length(tissue_indexed)-1)*(length(tissue_indexed)-1))-(length(tissue_indexed)-1))/2), ncol=4)
-  colnames(CT_conn_mat) <- c('mean', 'median', 'max', 'min')
-  CT_counter <- 1
-  
-  for(i in 1:(length(tissue_indexed)-1)) {
-    temp_adj_mat <- adj_mat[(tissue_indexed[i]+1):tissue_indexed[i+1], (tissue_indexed[i]+1):tissue_indexed[i+1]]
-    k <- rowSums(temp_adj_mat)
-    TS_conn_mat[i, ] <- c(mean(k), median(k), max(k), min(k))
-    
-    if(i < length(tissue_indexed)-1) {
-      for(j in 1:(length(tissue_indexed)-1-i)) {
-        temp_adj_mat <- adj_mat[(tissue_indexed[i]+1):tissue_indexed[i+1], (tissue_indexed[i+j]+1):tissue_indexed[i+j+1]]
-        k <- rowSums(temp_adj_mat)
-        CT_conn_mat[CT_counter, ] <- c(mean(k), median(k), max(k), min(k))
-        CT_counter <- CT_counter + 1
-      }
-    }
-    
+
+  # ----- גבולות רקמות לפי ה-underscore האחרון -----
+  tissue_of_col <- sub("_([^_]*)$", "", colnames(adj_mat))
+  rle_info <- rle(tissue_of_col)
+  sizes <- rle_info$lengths
+  tissues_ord <- rle_info$values
+  starts <- c(0L, cumsum(sizes))  # 0, n1, n1+n2, ...
+
+  # טבלאות תוצאות
+  TS_conn_mat <- matrix(NA, nrow=length(sizes), ncol=4,
+                        dimnames=list(tissues_ord, c('mean','median','max','min')))
+
+  n_pairs <- (length(sizes)*(length(sizes)-1))/2
+  CT_conn_mat <- matrix(NA, nrow=n_pairs, ncol=4, dimnames=NULL)
+  colnames(CT_conn_mat) <- c('mean','median','max','min')
+
+  # בתוך-רקמה (TS)
+  for (i in seq_along(sizes)) {
+    rows <- (starts[i] + 1):starts[i+1]
+    Aii <- adj_mat[rows, rows, drop=FALSE]
+    ki  <- rowSums(Aii)
+    TS_conn_mat[i, ] <- c(mean(ki), median(ki), max(ki), min(ki))
   }
-  
-  
-  scale_free_conn_list <- list(r2_conn=r2_conn, TS_conn_mat=TS_conn_mat, CT_conn_mat=CT_conn_mat)
-  # save(scale_free_conn_list, file='Scale_free_conn_list.RData')
-  
-  
-  R2_Conn <- list(r2=r2_conn$r2, mean_conn=r2_conn$mean_conn, TS_mean_conn=paste(TS_conn_mat [ ,'mean'], collapse = ', '), mean_TS_mean_conn=mean(TS_conn_mat [ ,'mean']),
-                  max_TS_mean_conn=max(TS_conn_mat [ ,'mean']), min_TS_mean_conn=min(TS_conn_mat [ ,'mean']), CT_mean_conn=paste(CT_conn_mat[ ,'mean'], collapse = ', '),
-                  mean_CT_mean_conn=mean(CT_conn_mat[ ,'mean']), max_CT_mean_conn=max(CT_conn_mat[ ,'mean']), min_CT_mean_conn=min(CT_conn_mat[ ,'mean']))
-  
-  return(R2_Conn)
+
+  # בין-רקמתי (CT)
+  ct_idx <- 1L
+  for (i in seq_along(sizes)) {
+    rows <- (starts[i] + 1):starts[i+1]
+    for (j in (i+1):length(sizes)) {
+      cols <- (starts[j] + 1):starts[j+1]
+      Aij <- adj_mat[rows, cols, drop=FALSE]
+      kij <- rowSums(Aij)
+      CT_conn_mat[ct_idx, ] <- c(mean(kij), median(kij), max(kij), min(kij))
+      ct_idx <- ct_idx + 1L
+    }
+  }
+
+  list(
+    r2_conn = r2_conn,
+    TS_conn_mat = TS_conn_mat,
+    CT_conn_mat = CT_conn_mat,
+    summary = list(
+      r2 = r2_conn$r2,
+      mean_conn = r2_conn$mean_conn,
+      mean_TS_mean_conn = mean(TS_conn_mat[,'mean']),
+      mean_CT_mean_conn = mean(CT_conn_mat[,'mean'])
+    )
+  )
 }
 
 LoadExprData<-function(tissue_name, tissue_file_name, 
@@ -924,13 +938,9 @@ Clusters_Table <- function(TOM_mat, minClusterSize = 30, plot_heatmap = FALSE, t
         return(empty)
     }
 
-    split_pos <- regexpr("_", gene_names, fixed = TRUE)
-    tissue_vec <- ifelse(split_pos > 0, 
-                        substr(gene_names, 1, split_pos - 1), 
-                        "Unknown")
-    gene_vec <- ifelse(split_pos > 0, 
-                       substr(gene_names, split_pos + 1, nchar(gene_names)), 
-                       gene_names)
+    sp <- split_gene_id(gene_names)
+    tissue_vec <- sp$tissue
+    gene_vec   <- sp$gene
 
     df_list <- vector("list", length(module_labels))
     for (k in seq_along(module_labels)) {
