@@ -851,7 +851,7 @@ if __name__ == "__main__":
         kegg_long_csv=KEGG_CSV,
         modules_details_tsv=MODULES,
         pdf_path="kegg_TS_CT_enrichment_between_V4.pdf",
-        selection="global_top", K_GLOBAL=99999999, cap=4.0,
+        selection="global_top", K_GLOBAL=60, cap=4.0,
         cluster_cols=True, cluster_rows=True, row_grouping=(None),
         add_hist=True,
         hist_stacked_regions=True,
@@ -861,5 +861,5 @@ if __name__ == "__main__":
         build_matrix_fn=build_kegg_logp_matrix,
         ts_exclude_modules=[],            # ← לדוגמה: להסיר מודולים מה-TS
         ct_exclude_modules=[],
-        star_color="crimson", star_fontsize=6, star_outline=False, hist_as_proportion=True
+        star_color="crimson", star_fontsize=6, star_outline=False, hist_as_proportion=True, show_row_labels=True
     )
