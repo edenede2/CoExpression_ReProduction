@@ -182,8 +182,8 @@ enrichmentKegg = function(modules) {
 
 
 # ---------------------------------------------
-Clusters_table = "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/Shared drives/is-SomekhLab/inter_tissue_coexpression/proccessed_data/ROSMAP_full_outputs/xwgcna_rosmap_autobeta_run4_Cluster_table.tsv"
-Clusters_details <- read.delim("/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/Shared drives/is-SomekhLab/inter_tissue_coexpression/proccessed_data/ROSMAP_full_outputs/xwgcna_rosmap_autobeta_run4_Cluster_details.tsv",sep="\t", header=T)
+Clusters_table = "/media/psylab-6028/DATA/Eden/CoExpression_ReProduction/tryRosmap_Cluster_table3.tsv"
+Clusters_details <- read.delim("/media/psylab-6028/DATA/Eden/CoExpression_ReProduction/tryRosmap_Cluster_details3.tsv",sep="\t", header=T)
 Clusters_table <- read.delim(Clusters_table,sep="\t", header=T)
 
 go_enrich = enrichmentGO(Clusters_table)
@@ -205,38 +205,38 @@ go_tab = data.frame(
 
 
 write.table(kegg_enrich@compareClusterResult,
-            "kegg_rosmap_full2.csv",
+            "kegg_rosmap_full1.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$BP$enrichment,
-            "go_bp_tab_rosmap_full2.csv",
+            "go_bp_tab_rosmap_full1.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$CC$enrichment,
-            "go_cc_tab_rosmap_full2.csv",
+            "go_cc_tab_rosmap_full1.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$MF$enrichment,
-            "go_mf_tab_rosmap_full2.csv",
+            "go_mf_tab_rosmap_full1.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 
 write.table(go_enrich_filter$enrichmentP,
-            "go_pmat_rosmap_full2.tsv",
+            "go_pmat_rosmap_full1.tsv",
             sep="\t")
 
 # Save top GO terms per module summary
 write.table(
   go_tab,
-  "go_top_terms_rosmap_full2.csv",
+  "go_top_terms_rosmap_full1.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE
@@ -247,78 +247,78 @@ write.table(
 
 
 
-# ---------------------------------------------
-clusters_table_path <-
-  "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/Shared drives/is-SomekhLab/inter_tissue_coexpression/proccessed_data/ROSMAP_full_outputs/xwgcna_rosmap_autobeta_run5_Cluster_table.txt"
-clusters_details <- read.delim(
-  "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/Shared drives/is-SomekhLab/inter_tissue_coexpression/proccessed_data/ROSMAP_full_outputs/xwgcna_rosmap_autobeta_run5_Cluster_details.tsv",
-  sep = "\t",
-  header = TRUE
-)
-clusters_table <- read.delim(clusters_table_path, sep = "\t", header = TRUE)
+# # ---------------------------------------------
+# clusters_table_path <-
+#   "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/Shared drives/is-SomekhLab/inter_tissue_coexpression/proccessed_data/ROSMAP_full_outputs/xwgcna_rosmap_autobeta_run5_Cluster_table.txt"
+# clusters_details <- read.delim(
+#   "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/Shared drives/is-SomekhLab/inter_tissue_coexpression/proccessed_data/ROSMAP_full_outputs/xwgcna_rosmap_autobeta_run5_Cluster_details.tsv",
+#   sep = "\t",
+#   header = TRUE
+# )
+# clusters_table <- read.delim(clusters_table_path, sep = "\t", header = TRUE)
 
-go_enrich2 <- enrichmentGO(clusters_table)
-go_enrich_filter2 <- filterCommonGOTerms(go_enrich2, 50)
-kegg_enrich2 <- enrichmentKegg(clusters_table)
+# go_enrich2 <- enrichmentGO(clusters_table)
+# go_enrich_filter2 <- filterCommonGOTerms(go_enrich2, 50)
+# kegg_enrich2 <- enrichmentKegg(clusters_table)
 
-# Extract top enrichment terms for second run
-n_clu2 <- max(clusters_table$Cluster.ID, na.rm = TRUE)
-top_go_terms_bp2 <- get_top_terms_per_module(go_enrich_filter2, "BP", n_modules = n_clu2, top_n = 5)
-top_go_terms_cc2 <- get_top_terms_per_module(go_enrich_filter2, "CC", n_modules = n_clu2, top_n = 5)
-top_go_terms_mf2 <- get_top_terms_per_module(go_enrich_filter2, "MF", n_modules = n_clu2, top_n = 5)
+# # Extract top enrichment terms for second run
+# n_clu2 <- max(clusters_table$Cluster.ID, na.rm = TRUE)
+# top_go_terms_bp2 <- get_top_terms_per_module(go_enrich_filter2, "BP", n_modules = n_clu2, top_n = 5)
+# top_go_terms_cc2 <- get_top_terms_per_module(go_enrich_filter2, "CC", n_modules = n_clu2, top_n = 5)
+# top_go_terms_mf2 <- get_top_terms_per_module(go_enrich_filter2, "MF", n_modules = n_clu2, top_n = 5)
 
-go_tab2 <- data.frame(
-  top_go_bp = vapply(top_go_terms_bp2, function(x) paste(x, collapse = ";"), character(1)),
-  top_go_cc = vapply(top_go_terms_cc2, function(x) paste(x, collapse = ";"), character(1)),
-  top_go_mf = vapply(top_go_terms_mf2, function(x) paste(x, collapse = ";"), character(1))
-)
+# go_tab2 <- data.frame(
+#   top_go_bp = vapply(top_go_terms_bp2, function(x) paste(x, collapse = ";"), character(1)),
+#   top_go_cc = vapply(top_go_terms_cc2, function(x) paste(x, collapse = ";"), character(1)),
+#   top_go_mf = vapply(top_go_terms_mf2, function(x) paste(x, collapse = ";"), character(1))
+# )
 
-write.table(
-  kegg_enrich2@compareClusterResult,
-  "kegg_rosmap_50001.csv",
-  sep = ",",
-  quote = FALSE,
-  row.names = FALSE
-)
+# write.table(
+#   kegg_enrich2@compareClusterResult,
+#   "kegg_rosmap_50001.csv",
+#   sep = ",",
+#   quote = FALSE,
+#   row.names = FALSE
+# )
 
-write.table(
-  go_enrich_filter2$bestPTerms$BP$enrichment,
-  "go_bp_tab_rosmap_50001.csv",
-  sep = ",",
-  quote = FALSE,
-  row.names = FALSE
-)
+# write.table(
+#   go_enrich_filter2$bestPTerms$BP$enrichment,
+#   "go_bp_tab_rosmap_50001.csv",
+#   sep = ",",
+#   quote = FALSE,
+#   row.names = FALSE
+# )
 
-write.table(
-  go_enrich_filter2$bestPTerms$CC$enrichment,
-  "go_cc_tab_rosmap_50001.csv",
-  sep = ",",
-  quote = FALSE,
-  row.names = FALSE
-)
+# write.table(
+#   go_enrich_filter2$bestPTerms$CC$enrichment,
+#   "go_cc_tab_rosmap_50001.csv",
+#   sep = ",",
+#   quote = FALSE,
+#   row.names = FALSE
+# )
 
-write.table(
-  go_enrich_filter2$bestPTerms$MF$enrichment,
-  "go_mf_tab_rosmap_50001.csv",
-  sep = ",",
-  quote = FALSE,
-  row.names = FALSE
-)
+# write.table(
+#   go_enrich_filter2$bestPTerms$MF$enrichment,
+#   "go_mf_tab_rosmap_50001.csv",
+#   sep = ",",
+#   quote = FALSE,
+#   row.names = FALSE
+# )
 
-write.table(
-  go_enrich_filter2$enrichmentP,
-  "go_pmat_rosmap_50001.tsv",
-  sep = "\t"
-)
+# write.table(
+#   go_enrich_filter2$enrichmentP,
+#   "go_pmat_rosmap_50001.tsv",
+#   sep = "\t"
+# )
 
-# Save top GO terms per module summary for second run
-write.table(
-  go_tab2,
-  "go_top_terms_rosmap_50001.csv",
-  sep = ",",
-  quote = FALSE,
-  row.names = FALSE
-)
+# # Save top GO terms per module summary for second run
+# write.table(
+#   go_tab2,
+#   "go_top_terms_rosmap_50001.csv",
+#   sep = ",",
+#   quote = FALSE,
+#   row.names = FALSE
+# )
 
-# Optional plotting (clusterProfiler barplot expects enrichResult/compareClusterResult)
-# barplot(kegg_enrich, showCategory = 20)
+# # Optional plotting (clusterProfiler barplot expects enrichResult/compareClusterResult)
+# # barplot(kegg_enrich, showCategory = 20)
