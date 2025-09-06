@@ -193,36 +193,33 @@ build_beta_matrix_from_crossings <- function(beta_info, tissues, thr = 0.80, req
   if (is.na(slope_col)) return(df[[r2_col]])
   -sign(df[[slope_col]]) * df[[r2_col]]
 }
-# ===== NEW: Fisher-z shrinker for cross-tissue (bipartite) correlations =====
+
 fisherZ_shrink_bipartite <- function(
   Mi, Mj,
   cor_method = "pearson",
   scheme     = c("to_ref","lambda"),
-  N_ref      = c("median","max"),  # או מספר שלם, למשל 20
+  N_ref      = c("median","max"),  
   min_n      = 3L,
-  cap_at_1   = TRUE,               # לא "מגדילים" זוגות עם N>N_ref
-  lambda     = 10,                 # רלוונטי רק ל-"lambda"
+  cap_at_1   = TRUE,               
+  lambda     = 10,                 
   eps        = 1e-7
 ){
   scheme <- match.arg(scheme)
-  # ספירת תורמים משותפים לכל זוג גנים: n_ij = t(!NA(Mi)) %*% !NA(Mj)
   Ri <- is.finite(as.matrix(Mi)); Rj <- is.finite(as.matrix(Mj))
   n_mat <- t(Ri) %*% Rj
 
-  # קורלציות עמודות (גנים) על פני התורמים המשותפים
   if (tolower(cor_method) == "bicor") {
     S <- WGCNA::bicor(Mi, Mj, use = "pairwise.complete.obs", maxPOutliers = 1)
   } else {
     S <- stats::cor(Mi, Mj, use = "pairwise.complete.obs", method = "pearson")
   }
   S[!is.finite(S)] <- 0
-  S <- pmax(pmin(S, 1 - eps), -1 + eps)  # מניעת ±1 מדויק
+  S <- pmax(pmin(S, 1 - eps), -1 + eps)  
 
-  Z <- atanh(S)                           # Fisher-z
+  Z <- atanh(S)                           
   n_ok <- n_mat >= min_n
 
   if (scheme == "to_ref") {
-    # קביעת N_ref
     if (length(N_ref) == 1 && is.character(N_ref)) {
       nn <- as.vector(n_mat[n_ok])
       if (!length(nn)) return(matrix(0, nrow = ncol(Mi), ncol = ncol(Mj),
@@ -235,13 +232,13 @@ fisherZ_shrink_bipartite <- function(
     fac <- sqrt(pmax(n_mat - 3, 0) / pmax(N0 - 3, 1))
     if (cap_at_1) fac <- pmin(fac, 1)
     Zadj <- Z * fac
-  } else { # "lambda"
+  } else {
     w <- pmax(n_mat - 3, 0) / (pmax(n_mat - 3, 0) + lambda)
     Zadj <- Z * w
   }
 
   R <- tanh(Zadj)
-  R[!n_ok] <- 0                         # זוגות עם מעט תצפיות → 0 (או NA אם תרצה)
+  R[!n_ok] <- 0                         
   R[!is.finite(R)] <- 0
   dimnames(R) <- list(colnames(Mi), colnames(Mj))
   R
@@ -492,20 +489,18 @@ make_all_beta_plots <- function(beta_info, tissues,
           "\n  - ", heatmap_pdf,
           "\n✓ Beta matrix CSV: ", heatmap_csv)
 }
+
 R2_connectivity <- function(adj_mat) {
-  # ----- Scale-free על כל הגרף -----
   k <- rowSums(adj_mat)
   r2 <- checkScaleFree_logbin(k)$Rsquared.SFT
   r2_conn <- list(r2=r2, mean_conn=mean(k), median_conn=median(k), max_conn=max(k), min_conn=min(k))
 
-  # ----- גבולות רקמות לפי ה-underscore האחרון -----
   tissue_of_col <- sub("_([^_]*)$", "", colnames(adj_mat))
   rle_info <- rle(tissue_of_col)
   sizes <- rle_info$lengths
   tissues_ord <- rle_info$values
-  starts <- c(0L, cumsum(sizes))  # 0, n1, n1+n2, ...
+  starts <- c(0L, cumsum(sizes))  
 
-  # טבלאות תוצאות
   TS_conn_mat <- matrix(NA, nrow=length(sizes), ncol=4,
                         dimnames=list(tissues_ord, c('mean','median','max','min')))
 
@@ -513,7 +508,6 @@ R2_connectivity <- function(adj_mat) {
   CT_conn_mat <- matrix(NA, nrow=n_pairs, ncol=4, dimnames=NULL)
   colnames(CT_conn_mat) <- c('mean','median','max','min')
 
-  # בתוך-רקמה (TS)
   for (i in seq_along(sizes)) {
     rows <- (starts[i] + 1):starts[i+1]
     Aii <- adj_mat[rows, rows, drop=FALSE]
@@ -521,7 +515,6 @@ R2_connectivity <- function(adj_mat) {
     TS_conn_mat[i, ] <- c(mean(ki), median(ki), max(ki), min(ki))
   }
 
-  # בין-רקמתי (CT)
   ct_idx <- 1L
   for (i in seq_along(sizes)) {
     rows <- (starts[i] + 1):starts[i+1]
@@ -1496,7 +1489,6 @@ wgcna_pick_CT_new <- function(
   Mi <- X_A[common, , drop = FALSE]
   Mj <- X_B[common, , drop = FALSE]
 
-  # ---- NEW: Fisher-z shrinker when requested ----
   if (isTRUE(fisher)) {
     S <- fisherZ_shrink_bipartite(
       Mi, Mj,
@@ -1508,12 +1500,7 @@ wgcna_pick_CT_new <- function(
       lambda     = fisher_lambda
     )
   } else {
-    if (tolower(cor_method) == "bicor") {
-      S <- WGCNA::bicor(Mi, Mj, use = "pairwise.complete.obs",
-                        maxPOutliers = bicor_maxPOutliers, robustY = bicor_robustY)
-    } else {
-      S <- stats::cor(Mi, Mj, use = "pairwise.complete.obs", method = "pearson")
-    }
+    S <- stats::cor(Mi, Mj, use = "pairwise.complete.obs", method = "pearson")
   }
   S[!is.finite(S)] <- 0
 
@@ -1651,8 +1638,6 @@ wgcna_pick_CT <- function(
 
 
 
-# --------------------------- Auto picker (TS & CT) ---------------------------
-# Mirrors your current auto_pick_powers() return shape so you can plug it in.
 wgcna_auto_pick_powers_new <- function(
   tissue_names, tissue_expr_file_names,
   sd_quantile = 0.50, max_genes_per_tissue = 5000,
@@ -1662,7 +1647,6 @@ wgcna_auto_pick_powers_new <- function(
   aggregate_by_donor_CT = FALSE, min_common_CT = 3L,
   ct_nBreaks = 50, ct_removeFirst = TRUE,
   bicor_maxPOutliers = 1, bicor_robustY = FALSE,
-  # ---- NEW: Fisher passthrough ----
   ct_fisher = FALSE,
   ct_fisher_scheme = c("to_ref","lambda"),
   ct_fisher_Nref = c("median","max"),
@@ -2422,7 +2406,6 @@ XWGCNA_Clusters_autoBeta <- function(
           aggregate_by_donor_CT = aggregate_by_donor_CT,
           min_common_CT = ct_min_common,
           ct_nBreaks = 12,
-          # ---- NEW: pass Fisher flags so בחירת β ב-CT תהיה עקבית עם הבנייה ----
           ct_fisher = ct_fisher,
           ct_fisher_scheme = ct_fisher_scheme,
           ct_fisher_Nref = ct_fisher_Nref,

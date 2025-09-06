@@ -10,23 +10,17 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 
 
 def add_bottom_module_strip(ax_hm, module_ids, fontsize=6, rotation=90, frac=0.16):
-    """
-    מצייר ציר-פס דק *מתחת* ל-ax_hm עם תוויות מודולים.
-    frac = גובה הפס ביחס לגובה ההיטמאפ (ביחידות יחסיות).
-    """
-    # יוצר ציר זעיר מתחת לציר ההיטמאפ
+
     strip = inset_axes(ax_hm, width="100%", height=f"{frac*100}%",
                        loc="lower center",
                        bbox_to_anchor=(0, -frac, 1, frac),
                        bbox_transform=ax_hm.transAxes,
                        borderpad=0)
-    # תחום X זהה להיטמאפ
     n = len(module_ids)
     strip.set_xlim(-0.5, n - 0.5)
     strip.set_ylim(0, 1)
     strip.axis("off")
 
-    # כתיבת תוויות במרכז כל עמודה
     x = np.arange(n)
     for j, mid in enumerate(module_ids):
         strip.text(j, 0.0, str(int(mid)), ha="center", va="bottom",
@@ -35,9 +29,6 @@ def add_bottom_module_strip(ax_hm, module_ids, fontsize=6, rotation=90, frac=0.1
 
 
 
-# ------------------------------
-# 1) עזר: חילוץ מטא לשיוך קטגוריה/סאבקטגוריה לשמות שורות
-# ------------------------------
 def _std_cols(df):
     low = {c.lower(): c for c in df.columns}
     def pick(*keys):
@@ -53,7 +44,6 @@ def _std_cols(df):
     }
 
 def _extract_row_meta_from_kegg(kegg_long_csv, row_labels):
-    """row_labels הם תוויות השורות (יכול להיות 'ID — Description' או רק Description)."""
     df = pd.read_csv(kegg_long_csv, engine="python", on_bad_lines="skip")
     cols = _std_cols(df)
     if cols["Description"] is None:
@@ -78,13 +68,7 @@ def _extract_row_meta_from_kegg(kegg_long_csv, row_labels):
     row_meta = desc_series.to_frame().merge(meta, on="Description", how="left").set_index(desc_series.index)
     return row_meta[["category","subcategory"]]
 
-# ------------------------------
-# 2) עזר: בניית מפות צבעים קבועות מה-KEGG המלא
-# ------------------------------
 def build_annotation_palettes_from_kegg(kegg_long_csv, base_pal=None):
-    """
-    מחזיר שני מילונים: (palette_cat, palette_sub) כך שהצבעים עקביים בין TS/CT.
-    """
     df = pd.read_csv(kegg_long_csv, engine="python", on_bad_lines="skip")
     cols = _std_cols(df)
     cat = df[cols["category"]] if cols["category"] in df.columns else pd.Series(dtype=object)
@@ -106,15 +90,10 @@ def build_annotation_palettes_from_kegg(kegg_long_csv, base_pal=None):
     palette_sub = {lab: pool[i % len(pool)] for i, lab in enumerate(uniq_sub)}
     return palette_cat, palette_sub
 
-# ------------------------------
-# 3) עזר: סדרי קלאסטרינג (עם/בלי חלוקה לבלוקים לפי קטגוריה/סאבקטגוריה)
-# ------------------------------
 def _cluster_orders(logp_df, row_meta,
                     cluster_cols=True, col_metric="euclidean", col_method="average",
                     cluster_rows=True, row_metric="euclidean", row_method="average",
                     row_grouping=("category","subcategory")):
-    """מחזיר row_order, col_order וגם נקודות חוצץ לקווי הפרדה בין קטגוריות."""
-    # ---- עמודות ----
     if cluster_cols:
         gcol = sns.clustermap(
             np.nan_to_num(logp_df.values, nan=0.0),
@@ -127,13 +106,12 @@ def _cluster_orders(logp_df, row_meta,
     else:
         col_order = list(logp_df.columns)
 
-    # ---- שורות ----
     rm = row_meta.copy()
     def _norm(x): return np.nan if pd.isna(x) else str(x).strip()
     rm["category"]    = rm["category"].map(_norm)
     rm["subcategory"] = rm["subcategory"].map(_norm)
 
-    sep_positions = []  # חוצצים בין קטגוריות (לאורך ציר y) להדגשה
+    sep_positions = [] 
 
     if not cluster_rows:
         row_order = list(logp_df.index)
@@ -148,7 +126,6 @@ def _cluster_orders(logp_df, row_meta,
             row_order = [logp_df.index[i] for i in grow.dendrogram_row.reordered_ind]
             plt.close(grow.fig)
         else:
-            # סדר בלוקים לפי הופעה, קלאסטרינג בתוך כל בלוק
             keys = list(row_grouping)
             for k in keys:
                 cats = pd.unique(rm[k].dropna())
@@ -173,26 +150,20 @@ def _cluster_orders(logp_df, row_meta,
                     plt.close(g.fig)
                 else:
                     reord = list(idxs)
-                # קווי הפרדה בין קטגוריות ראשיות:
                 curr_cat = sub_rm["category"].iloc[0]
                 if last_cat is None:
                     last_cat = curr_cat
                 elif curr_cat != last_cat:
-                    sep_positions.append(cum_len - 0.5)  # קו בין בלוקים
+                    sep_positions.append(cum_len - 0.5) 
                     last_cat = curr_cat
                 row_order.extend(reord)
                 cum_len += len(reord)
 
     return row_order, col_order, sep_positions
 
-# ------------------------------
-# 4) עזר: גודל מודולים מה-Cluster Details (כדי לצייר היסט מעל ההיטמאפ)
-# ------------------------------
+
 def _read_module_sizes(modules_details_tsv):
-    """
-    מחזיר Series: index=Cluster ID (int), value=module size (מספר גנים).
-    מנסה קודם 'Cluster Size'; אם אין – סכום AC+MF+PCG.
-    """
+
     md = pd.read_csv(modules_details_tsv, sep="\t")
     id_col = "Cluster ID"
     size_col = None
@@ -207,7 +178,6 @@ def _read_module_sizes(modules_details_tsv):
     elif size_col is not None:
         sizes = pd.to_numeric(md[size_col], errors="coerce").fillna(0)
     else:
-        # fallback
         sizes = pd.Series([0]*len(md))
 
     out = pd.Series(sizes.values, index=pd.to_numeric(md[id_col], errors="coerce").astype("Int64")).dropna()
@@ -228,9 +198,9 @@ def export_kegg_ts_ct_enrichment_pdf(
     strip_width=0.018,
     add_hist=True, bar_color="#4477AA", bar_width=0.85, hist_height_ratio=0.18,
     hist_stacked_regions=False,
-    show_region_legend=None,        # חדש: None => מציגים רק אם stacked
+    show_region_legend=None,        
     hist_regions_cols=("AC","MF","PCG"),
-    hist_region_colors=None,   # {"AC":"#88CCEE","MF":"#CC6677","PCG":"#DDCC77"}
+    hist_region_colors=None,   
     palette_cat=None, palette_sub=None,
     build_matrix_fn=None,
     ts_group="TS", ct_group="CT",
@@ -241,18 +211,14 @@ def export_kegg_ts_ct_enrichment_pdf(
     assert build_matrix_fn is not None, "אנא ספק את build_kegg_logp_matrix דרך הפרמטר build_matrix_fn"
     if show_region_legend is None:
         show_region_legend = bool(add_hist and hist_stacked_regions)
-    # ----- מיפוי צבעים עקבי לאזורים (AC/MF/PCG) -----
     regions = [str(r).strip() for r in hist_regions_cols]
     if hist_region_colors is None:
-        # צבעי ברירת מחדל עקביים
         hist_region_colors = {"AC":"#88CCEE","MF":"#CC6677","PCG":"#DDCC77"}
-    # השלמת צבעים חסרים (אם הועבר מילון חלקי)
     default_pool = list(plt.cm.Set2.colors)
     region_color_map = {}
     for i, r in enumerate(regions):
         region_color_map[r] = hist_region_colors.get(r, default_pool[i % len(default_pool)])
 
-    # --- בנייה ל-TS ול-CT (ללא שינוי) ---
     logp_ts, meas_ts, stars_ts = build_matrix_fn(
         kegg_long_csv, modules_details=modules_details_tsv, clean_TS=True,
         cap=cap, selection=selection, K_GLOBAL=K_GLOBAL,
@@ -266,7 +232,6 @@ def export_kegg_ts_ct_enrichment_pdf(
         star_from=star_from, group=ct_group
     )
 
-    # --- הסרת מודולים (כמו אצלך) ---
     def _drop_cols(df, drop_set):
         if not drop_set: return df
         keep = []
@@ -291,17 +256,14 @@ def export_kegg_ts_ct_enrichment_pdf(
         logp_ct   = _drop_cols(logp_ct, ct_drop)
         if stars_ct is not None: stars_ct = stars_ct.reindex(index=logp_ct.index, columns=logp_ct.columns)
 
-    # --- מטא, פלטות, קלאסטרינג, יישור (כמו אצלך) ---
     row_meta_ts = _extract_row_meta_from_kegg(kegg_long_csv, logp_ts.index.tolist())
     row_meta_ct = _extract_row_meta_from_kegg(kegg_long_csv, logp_ct.index.tolist())
     if palette_cat is None or palette_sub is None:
         palette_cat_all, palette_sub_all = build_annotation_palettes_from_kegg(kegg_long_csv)
         if palette_cat is None: palette_cat = palette_cat_all
         if palette_sub is None: palette_sub = palette_sub_all
-        # --- NEW: סדר הופעה גלובלי לקטגוריות/סאבקטגוריות מתוך ה-KEGG המלא ---
     cat_order, sub_order = _appearance_orders_from_kegg(kegg_long_csv)
 
-    # --- קלאסטרינג + קווי הפרדה, תוך שמירה על סדר הופעה גלובלי ---
     ts_row_order, ts_col_order, ts_seps = _cluster_orders(
         logp_ts, row_meta_ts, cluster_cols, col_metric, col_method,
         cluster_rows, row_metric, row_method, row_grouping=row_grouping,
@@ -332,19 +294,15 @@ def export_kegg_ts_ct_enrichment_pdf(
     ct_cat_colors = _arr_from_palette(row_meta_ct["category"], palette_cat)
     ct_sub_colors = _arr_from_palette(row_meta_ct["subcategory"], palette_sub)
 
-    # --- נתוני היסטוגרמות ---
     def _canon(x): return str(x).strip().upper()
     regions = [_canon(r) for r in hist_regions_cols]
     region_df = _read_region_counts(modules_details_tsv, regions).rename(columns=_canon)
 
 
 
-    # region_df = _read_region_counts(modules_details_tsv, regions)
-    # region_df = region_df.rename(columns=_canon)
 
     mod_sizes = _read_module_sizes(modules_details_tsv) if add_hist and not hist_stacked_regions else None
 
-    # --- פריסה וציור (כמו אצלך) ---
     strip = strip_width; gap = 0.05; legend_w = 0.35
     hr_hist = (0.18 if add_hist else 0.01); hr_hm, hr_cbar = 1.00, 0.02
 
@@ -368,10 +326,8 @@ def export_kegg_ts_ct_enrichment_pdf(
     ax_ts_hist.sharex(ax_ts_hm)
     ax_ct_hist.sharex(ax_ct_hm)
 
-    # להבטיח גבולות זהים (גם אם imshow ישנה אותם)
     ax_ts_hist.set_xlim(ax_ts_hm.get_xlim())
     ax_ct_hist.set_xlim(ax_ct_hm.get_xlim())
-    # ---- TS heatmap ----
     data_ts = np.nan_to_num(logp_ts.values, nan=0.0)
     im_ts = ax_ts_hm.imshow(data_ts, aspect="auto", vmin=0.0, vmax=cap, cmap="Blues")
     cb_ts = fig.colorbar(im_ts, cax=ax_ts_cbar, orientation="horizontal")
@@ -379,7 +335,6 @@ def export_kegg_ts_ct_enrichment_pdf(
     ax_ts_hm.set_xticks(range(logp_ts.shape[1])); ax_ts_hm.set_xticklabels(logp_ts.columns.astype(str), rotation=90)
     ax_ts_hm.set_yticks([])
 
-    # ax_ts_hm.set_title("TS KEGG enrichment")
 
     if row_grouping is not None and len(ts_seps) > 0:
         for y in ts_seps:
@@ -402,14 +357,11 @@ def export_kegg_ts_ct_enrichment_pdf(
                         path_effects=[pe.Stroke(linewidth=1.4, foreground="white"), pe.Normal()] if star_outline else None
                     )
 
-    # ---- היסטוגרמה TS (stacked עם צבעים עקביים) ----
-    # ---- היסטוגרמה TS (stacked: קומפוזיציה יחסית אם hist_as_proportion=True) ----
     if add_hist:
         x = np.arange(len(logp_ts.columns))
         ts_mod_ids = pd.Index(logp_ts.columns).astype(int)
 
         if hist_stacked_regions and region_df is not None:
-            # סדר העמודות לפי heatmap
             cols_int = pd.Index(logp_ts.columns).astype(int)
             rsel_ts = region_df.reindex(index=ts_mod_ids, columns=regions).fillna(0)
             assert np.array_equal(rsel_ts.index.values, ts_mod_ids.values)
@@ -417,12 +369,11 @@ def export_kegg_ts_ct_enrichment_pdf(
                 rsel_ts = rsel_ts.div(rsel_ts.sum(axis=1).replace(0, np.nan), axis=0).fillna(0.0)
             x_ts = np.arange(len(ts_mod_ids))
             bottom = np.zeros(len(x_ts))
-            for rc in regions:   # סדר קבוע ועקבי
+            for rc in regions:   
                 vals = rsel_ts[rc].to_numpy() if rc in rsel_ts.columns else np.zeros(len(x_ts))
                 ax_ts_hist.bar(x_ts, vals, width=bar_width, color=region_color_map[rc], bottom=bottom, label=rc)
                 bottom += vals
 
-            # ציר y ותיוג
             ax_ts_hist.set_xlim(-0.5, len(x_ts)-0.5); ax_ts_hist.set_xticks([])
             if hist_as_proportion:
                 ax_ts_hist.set_ylim(0, 1)
@@ -432,8 +383,6 @@ def export_kegg_ts_ct_enrichment_pdf(
             else:
                 ax_ts_hist.set_ylabel("Genes", fontsize=9)
 
-            # מקרא קטן רק בתוך ההיסט TS כשצריך (סביר לוותר, יש מקרא ימני משותף)
-            # ax_ts_hist.legend(frameon=False, fontsize=8, ncol=len(regions))
         else:
             sizes = (mod_sizes.reindex(pd.Index(logp_ts.columns).astype(int)).fillna(0).values
                     if mod_sizes is not None else np.zeros(len(x)))
@@ -442,7 +391,6 @@ def export_kegg_ts_ct_enrichment_pdf(
             ax_ts_hist.set_ylabel("Genes", fontsize=9)
     ax_ts_hist.set_title("TS KEGG enrichment")
 
-    # ---- CT heatmap ----
     data_ct = np.nan_to_num(logp_ct.values, nan=0.0)
     im_ct = ax_ct_hm.imshow(data_ct, aspect="auto", vmin=0.0, vmax=cap, cmap="Blues")
     cb_ct = fig.colorbar(im_ct, cax=ax_ct_cbar, orientation="horizontal")
@@ -472,8 +420,6 @@ def export_kegg_ts_ct_enrichment_pdf(
                         path_effects=[pe.Stroke(linewidth=1.4, foreground="white"), pe.Normal()] if star_outline else None
                     )
 
-    # ---- היסטוגרמה CT (אותו מיפוי צבעים בדיוק) ----
-    # ---- היסטוגרמה CT (אותו מיפוי צבעים בדיוק) ----
     if add_hist:
         ct_mod_ids = pd.Index(logp_ct.columns).astype(int)
         x = np.arange(len(logp_ct.columns))
@@ -505,7 +451,6 @@ def export_kegg_ts_ct_enrichment_pdf(
             else:
                 ax_ct_hist.set_ylabel("Genes", fontsize=9)
 
-            # ax_ct_hist.legend(frameon=False, fontsize=8, ncol=len(regions))
         else:
             sizes = (mod_sizes.reindex(pd.Index(logp_ct.columns).astype(int)).fillna(0).values
                     if mod_sizes is not None else np.zeros(len(x)))
@@ -513,7 +458,6 @@ def export_kegg_ts_ct_enrichment_pdf(
             ax_ct_hist.set_xlim(-0.5, len(x)-0.5); ax_ct_hist.set_xticks([])
             ax_ct_hist.set_ylabel("Genes", fontsize=9)
     ax_ct_hist.set_title("CT KEGG enrichment", pad=2, fontsize=11)
-    # ---- מקרא משותף: קטגוריות/סאבקטגוריות + אזורים (AC/MF/PCG) ----
     handles_cat = [Patch(facecolor=palette_cat[k], edgecolor='none', label=str(k)) for k in palette_cat]
     handles_sub = [Patch(facecolor=palette_sub[k], edgecolor='none', label=str(k)) for k in palette_sub]
     
@@ -651,12 +595,8 @@ def plot_log_heatmap_with_stars(logp_df, stars_df=None, cap=6.0, title="KEGG −
     fig.tight_layout()
     return fig
 
-# ---------- helpers you already have ----------
-# _std_cols, _extract_row_meta_from_kegg, build_annotation_palettes_from_kegg,
-# _cluster_orders, _read_module_sizes
-# (משתמשים בהן כמו קודם – אל תמחק)
 
-# ---- עזר: נרמול רשימות מודולים להסרה ----
+
 def _normalize_mod_set(lst):
     if lst is None: return set()
     norm = set()
@@ -664,20 +604,15 @@ def _normalize_mod_set(lst):
         try:
             norm.add(int(x))
         except Exception:
-            # אם למשל " 12 " או "12a" – נתעלם ממה שלא ניתן להמיר
             try:
                 norm.add(int(str(x).strip()))
             except Exception:
                 pass
     return norm
 
-# ---------- helpers you already have ----------
-# _std_cols, _extract_row_meta_from_kegg, build_annotation_palettes_from_kegg,
-# _cluster_orders, _read_module_sizes
-# (משתמשים בהן כמו קודם – אל תמחק)
 
 
-# ---- עזר: נרמול רשימות מודולים להסרה ----
+
 def _normalize_mod_set(lst):
     if lst is None: return set()
     norm = set()
@@ -685,7 +620,6 @@ def _normalize_mod_set(lst):
         try:
             norm.add(int(x))
         except Exception:
-            # אם למשל " 12 " או "12a" – נתעלם ממה שלא ניתן להמיר
             try:
                 norm.add(int(str(x).strip()))
             except Exception:
@@ -693,29 +627,23 @@ def _normalize_mod_set(lst):
     return norm
 
 
-# ---------- helpers you already have ----------
-# _std_cols, _extract_row_meta_from_kegg, build_annotation_palettes_from_kegg,
-# _cluster_orders, _read_module_sizes
-# (משתמשים בהן כמו קודם – אל תמחק)
 def _read_region_counts(modules_details_tsv, region_cols=("AC","MF","PCG")):
     md  = pd.read_csv(modules_details_tsv, sep="\t")
     cid = pd.to_numeric(md["Cluster ID"], errors="coerce").astype("Int64")
     md  = md.loc[cid.notna()].copy()
     cid = cid.astype(int)
 
-    # לבנות לפי מיקום (to_numpy) – בלי אינדקסים של md בכלל
     data = {
         c: (pd.to_numeric(md[c], errors="coerce").fillna(0).astype(int).to_numpy()
             if c in md.columns else np.zeros(len(md), dtype=int))
         for c in region_cols
     }
-    df = pd.DataFrame(data)           # אינדקס זמני רציף 0..N-1
-    df.index = cid.to_numpy()         # עכשיו להצמיד לפי Cluster ID (לפי מיקום)
+    df = pd.DataFrame(data)         
+    df.index = cid.to_numpy()         
     df = df.groupby(level=0, sort=True).sum()
     df.index = df.index.astype(int)
     return df
 
-# ---- עזר: נרמול רשימות מודולים להסרה ----
 def _normalize_mod_set(lst):
     if lst is None: return set()
     norm = set()
@@ -723,14 +651,12 @@ def _normalize_mod_set(lst):
         try:
             norm.add(int(x))
         except Exception:
-            # אם למשל " 12 " או "12a" – נתעלם ממה שלא ניתן להמיר
             try:
                 norm.add(int(str(x).strip()))
             except Exception:
                 pass
     return norm
 
-# === NEW: סדר הופעה גלובלי מתוך קובץ ה-KEGG המלא ===
 def _appearance_orders_from_kegg(kegg_long_csv):
     df = pd.read_csv(kegg_long_csv, engine="python", on_bad_lines="skip")
     cols = _std_cols(df)
@@ -743,14 +669,11 @@ def _appearance_orders_from_kegg(kegg_long_csv):
     cat_order = _clean_series(cols["category"])
     sub_order = _clean_series(cols["subcategory"])
     return cat_order, sub_order
-# === UPDATED: _cluster_orders מקבל סדרים גלובליים ושומר עליהם כשמקלסטרים בתוך בלוקים ===
 def _cluster_orders(logp_df, row_meta,
                     cluster_cols=True, col_metric="euclidean", col_method="average",
                     cluster_rows=True, row_metric="euclidean", row_method="average",
                     row_grouping=("category","subcategory"),
                     cat_order=None, sub_order=None):
-    """מחזיר row_order, col_order וגם sep_positions לקווי הפרדה בין קטגוריות."""
-    # ---- עמודות ----
     if cluster_cols:
         gcol = sns.clustermap(
             np.nan_to_num(logp_df.values, nan=0.0),
@@ -763,7 +686,6 @@ def _cluster_orders(logp_df, row_meta,
     else:
         col_order = list(logp_df.columns)
 
-    # ---- שורות ----
     rm = row_meta.copy()
     def _norm(x): return np.nan if pd.isna(x) else str(x).strip()
     rm["category"]    = rm["category"].map(_norm)
@@ -784,8 +706,6 @@ def _cluster_orders(logp_df, row_meta,
             row_order = [logp_df.index[i] for i in grow.dendrogram_row.reordered_ind]
             plt.close(grow.fig)
         else:
-            # קובעים סדר קטגוריות/סאבקטגוריות לפי הופעה גלובלית (אם סופק),
-            # ואז מוסיפים כל ערך "חדש" שלא הופיע, לפי סדר הופעתו המקומית
             def _cats_for(col_name, global_order):
                 seen_local = [x for x in pd.unique(rm[col_name].dropna())]
                 if global_order:
@@ -795,7 +715,6 @@ def _cluster_orders(logp_df, row_meta,
             cat_cats = _cats_for("category",    cat_order)
             sub_cats = _cats_for("subcategory", sub_order)
 
-            # בונים עמודות סדר דטרמיניסטיות בהתאם למפתחות המבוקשים
             keys = list(row_grouping)
             for k in keys:
                 if k == "category":
@@ -825,7 +744,6 @@ def _cluster_orders(logp_df, row_meta,
                     plt.close(g.fig)
                 else:
                     reord = list(idxs)
-                # חוצץ בין קטגוריות-על
                 curr_cat = sub_rm["category"].iloc[0]
                 if last_cat is None:
                     last_cat = curr_cat
@@ -859,7 +777,7 @@ if __name__ == "__main__":
         hist_region_colors={"AC":"#88CCEE","MFBA9BA46":"#CC6677","PCGBA23":"#DDCC77"},
         palette_cat=palette_cat, palette_sub=palette_sub,
         build_matrix_fn=build_kegg_logp_matrix,
-        ts_exclude_modules=[],            # ← לדוגמה: להסיר מודולים מה-TS
+        ts_exclude_modules=[],           
         ct_exclude_modules=[],
         star_color="crimson", star_fontsize=6, star_outline=False, hist_as_proportion=True, show_row_labels=True
     )
