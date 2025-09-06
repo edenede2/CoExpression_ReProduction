@@ -12,12 +12,10 @@ normalize_gene_ids <- function(x) {
   x <- as.character(x)
   x <- trimws(x)
 
-  # שליפת מזהה ENSG אם קיים בכל מקום במחרוזת (עם/בלי גרסה)
   m <- regexpr("ENSG\\d+(?:\\.\\d+)?", x, perl = TRUE)
   ens <- rep(NA_character_, length(x))
   ens[m > 0] <- regmatches(x, m)
 
-  # אם נמצא ENSG – הסר גרסת Ensembl (".15" וכו'); אחרת החזר את הטקסט המקורי
   out <- ifelse(!is.na(ens), sub("\\.\\d+$", "", ens), x)
   out
 }

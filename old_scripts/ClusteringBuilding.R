@@ -15,6 +15,10 @@ suppressMessages(WGCNA::allowWGCNAThreads())
 }
 split_gene_id <- function(x) {
   x <- as.character(x)
+  # handle case when there is _PAR genes
+  x <- sub("_PAR_Y$", "", x)
+  
+
   tissue <- sub("_([^_]*)$", "", x)  # הכל עד ה-underscore האחרון
   gene   <- sub("^.*_", "", x)       # מה שאחרי ה-underscore האחרון
   list(tissue = tissue, gene = gene)
@@ -653,7 +657,7 @@ AdjacencyFromExpr <- function(
         common <- intersect(di, dj)
 
         if (length(common) < ct_min_common) {
-          msg <- sprintf("Too few common donors between %s and %s (|common|=%d).",
+          msg <- sprintf("Too few common donors between %s and %s (|common|=%f).",
                          tissue_names[i], tissue_names[j], length(common))
           if (ct_too_few_action == "stop") stop(msg)
           # "zeros": משאירים את הבלוק בריבוע אפסים וממשיכים
@@ -927,7 +931,7 @@ Clusters_Table <- function(TOM_mat, minClusterSize = 30, plot_heatmap = FALSE, t
       dynamicColors = dynamicColors,
       restGenes = restGenes,
       out_file = paste0("TOM_heatmap_WGCNA_", group, ".png"),
-      tom_power = 2
+      tom_power = 1
     )
 
     module_labels <- sort(setdiff(unique(as.integer(dynamicMods)), 0L))
@@ -1132,7 +1136,13 @@ auto_pick_powers <- function(
   nBreaks         = 10,
   removeFirst     = TRUE,
   use_signed_R2_TS = FALSE,
-  use_signed_R2_CT = FALSE
+  use_signed_R2_CT = FALSE,
+  ct_fisher = FALSE,
+  ct_fisher_scheme = "to_ref",
+  ct_fisher_Nref = "median",
+  ct_fisher_cap_at_1 = TRUE,
+  ct_fisher_lambda = 10,
+  ct_min_common = 3L
 ){
   stopifnot(length(tissue_names) == length(tissue_expr_file_names))
   T <- length(tissue_names)
@@ -1475,7 +1485,7 @@ wgcna_pick_CT_new <- function(
 
   common <- intersect(rownames(X_A), rownames(X_B))
   if (length(common) < min_common) {
-    if (verbose) message(sprintf("[wgcna_pick_CT] Too few common donors: %d < %d", length(common), min_common))
+    if (verbose) message(sprintf("[wgcna_pick_CT] Too few common donors: %f < %f", length(common), min_common))
     return(list(
       beta = NA_integer_,
       fitIndices = data.frame(Power = powerVector, SFT.R.sq = NA_real_,
@@ -2446,7 +2456,7 @@ XWGCNA_Clusters_autoBeta <- function(
         TS_map <- beta_info$TS_power_map
         CT_power <- beta_info$CT_power
         CT_map <- beta_info$CT_power_map
-        message(sprintf("Auto β selected: TS=%d (per tissue: %s); CT=%d",
+        message(sprintf("Auto β selected: TS=%f (per tissue: %s); CT=%f",
                     TS_power, paste(beta_info$TS_per_tissue, collapse = ","), CT_power))
         if (plot_beta_curves) {
           plots_list <- plot_beta_curves_per_tissue(
@@ -2484,7 +2494,7 @@ XWGCNA_Clusters_autoBeta <- function(
       plot_beta_curves <- FALSE
     }
     message(sprintf(
-        "Adjacency: %d tissues, up to %d genes/tissue (sd_quantile=%.2f).",
+        "Adjacency: %f tissues, up to %f genes/tissue (sd_quantile=%.2f).",
         length(tissue_names), max_genes_per_tissue, sd_quantile
     ))
 
