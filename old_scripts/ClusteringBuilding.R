@@ -567,7 +567,103 @@ LoadExprData<-function(tissue_name, tissue_file_name,
     storage.mode(datExpr) <- "double"
     datExpr
 }
+
+AdjacencyFromExprold <- function(
+    tissue_names = NULL,
+    tissue_expr_file_names = NULL,
+    sd_quantile = 0.00,
+    max_genes_per_tissue = 5000,
+    cor_method = "pearson",
+    TS_power_map = NULL,
+    CT_power_map = NULL,
+    default_TS = 6L,
+    default_CT = 3L
+){
+  stopifnot(length(tissue_names) == length(tissue_expr_file_names))
+  T <- length(tissue_names)
   
+  expr_list   <- vector("list", T)
+  donor_mat <- vector("list", T)
+  idx <- integer(T+1); rc_names <- character(0)
+
+  
+  # Load + filter each tissue; also precompute donor-aggregated matrices
+  for (i in seq_len(T)) {
+    X <- LoadExprData(
+      tissue_names[i], tissue_expr_file_names[i],
+      sd_quantile = sd_quantile,
+      max_genes_per_tissue = max_genes_per_tissue
+    )
+    expr_list[[i]] <- X
+    donor_mat[[i]] <- .aggregate_by_donor(X)
+    idx[i + 1] <- idx[i] + ncol(X)
+    rc_names <- c(rc_names, colnames(X))
+  }
+  
+  # Allocate adjacency
+  A <- matrix(0, nrow = idx[T + 1],
+                    ncol = idx[T + 1],
+                    dimnames = list(rc_names, rc_names))
+  
+  # Within-tissue blocks (TS)
+  for (i in 1:T) {
+    rows <- (idx[i] + 1):idx[i + 1]
+    pow_i <- if(!is.null(TS_power_map) && !is.na(TS_power_map[tissue_names[i]])) {
+      as.integer(TS_power_map[tissue_names[i]])
+    } else {
+      default_TS
+    }
+    Sii <- abs(cor(
+      expr_list[[i]], use = "pairwise.complete.obs", method = cor_method
+    ))
+    A[rows, rows] <- Sii^pow_i
+  }
+  
+  # Cross-tissue blocks (CT) via donor intersection
+  if (T >= 2) {
+    for (i in 1:(T - 1)) {
+      rows <- (idx[i] + 1):idx[i + 1]
+      di <- rownames(donor_mat[[i]])
+      for (j in (i + 1):T) {
+        cols <- (idx[j] + 1):idx[j + 1]
+        pair_ij <- paste(tissue_names[i], tissue_names[j], sep = "||")
+        pair_ji <- paste(tissue_names[j], tissue_names[i], sep = "||")
+        pow_ij <- if(!is.null(CT_power_map)) {
+          if(!is.na(CT_power_map[pair_ij])){
+            as.integer(CT_power_map[pair_ij])
+          } else if(!is.na(CT_power_map[pair_ji])){
+            as.integer(CT_power_map[pair_ji])
+          } else {
+            default_CT
+          }
+        } else {
+          default_CT
+        }
+
+        dj <- rownames(donor_mat[[j]])
+        common <- intersect(di, dj)
+
+        if (length(common) < 3) {
+          msg <- sprintf("No/too-few common donors between %s and %s (|common|=%d).",
+                         tissue_names[i], tissue_names[j], length(common))
+          stop(msg, " Consider lowering filters or using consensus WGCNA.")
+          
+        }
+
+        Mi <- donor_mat[[i]][common, , drop = FALSE]
+        Mj <- donor_mat[[j]][common, , drop = FALSE]
+        Sij <- abs(cor(Mi, Mj, use = "pairwise.complete.obs", method = cor_method))
+        C <- Sij^pow_ij
+        A[rows, cols] <- C
+        A[cols, rows] <- t(C)
+      }
+    }
+  }
+
+  saveRDS(A, "adj_mat.rds")
+  A
+}
+
 
 AdjacencyFromExpr <- function(
     tissue_names = NULL,
@@ -626,6 +722,7 @@ AdjacencyFromExpr <- function(
     Sii <- abs(cor(
       expr_list[[i]], use = "pairwise.complete.obs", method = cor_method
     ))
+    diag(Sii) <- 0
     A[rows, rows] <- Sii^pow_i
   }
   
@@ -1703,7 +1800,6 @@ wgcna_auto_pick_powers_new <- function(
           targetR2 = targetR2, require_neg_slope = require_neg_slope,
           nBreaks = ct_nBreaks, removeFirst = ct_removeFirst,
           min_common = min_common_CT, verbose = verbose,
-          # ---- NEW: pass Fisher ----
           fisher = ct_fisher, fisher_scheme = ct_fisher_scheme,
           fisher_Nref = ct_fisher_Nref, fisher_cap = ct_fisher_cap_at_1,
           fisher_lambda = ct_fisher_lambda
@@ -2381,7 +2477,8 @@ XWGCNA_Clusters_autoBeta <- function(
     ct_fisher_cap_at_1 = TRUE,
     ct_fisher_lambda = 10,
     ct_min_common = 3L,
-    ct_too_few_action = c("stop","zeros")
+    ct_too_few_action = c("stop","zeros"),
+    adj_type = "old"
 ){
     ct_fisher_scheme  <- match.arg(ct_fisher_scheme)
     ct_too_few_action <- match.arg(ct_too_few_action)
@@ -2480,8 +2577,8 @@ XWGCNA_Clusters_autoBeta <- function(
         "Adjacency: %f tissues, up to %f genes/tissue (sd_quantile=%.2f).",
         length(tissue_names), max_genes_per_tissue, sd_quantile
     ))
-
-    adj_mat <- AdjacencyFromExpr(
+    if (adj_type == "new") {
+      adj_mat <- AdjacencyFromExpr(
         tissue_names = tissue_names,
         tissue_expr_file_names = tissue_expr_file_names,
         sd_quantile = sd_quantile,
@@ -2499,7 +2596,19 @@ XWGCNA_Clusters_autoBeta <- function(
         ct_min_common = ct_min_common,
         ct_too_few_action = ct_too_few_action
     )
-  
+    } else {
+      adj_mat <- AdjacencyFromExprold(
+        tissue_names = tissue_names,
+        tissue_expr_file_names = tissue_expr_file_names,
+        sd_quantile = sd_quantile,
+        max_genes_per_tissue = max_genes_per_tissue,
+        cor_method = cor_method,
+        TS_power_map = TS_map,
+        CT_power_map = CT_map,
+        default_TS = TS_power,
+        default_CT = CT_power
+      )
+    }
     if (save_intermediates) {
         saveRDS(adj_mat, file = paste0(out_prefix, "_adjacency.rds"))
     }
