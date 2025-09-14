@@ -168,7 +168,7 @@ enrichmentKegg = function(modules) {
     organism = "hsa",
     keyType = "ncbi-geneid",
     pvalueCutoff = 1,
-    qvalueCutoff = 0.05
+    qvalueCutoff = 1
   )
   setReadable(kegg_enrich, OrgDb = org.Hs.eg.db, keyType="ENTREZID")
 
@@ -182,8 +182,8 @@ enrichmentKegg = function(modules) {
 
 
 # ---------------------------------------------
-Clusters_table = "/media/psylab-6028/DATA/Eden/CoExpression_ReProduction/tryRosmap_Cluster_table3.tsv"
-Clusters_details <- read.delim("/media/psylab-6028/DATA/Eden/CoExpression_ReProduction/tryRosmap_Cluster_details3.tsv",sep="\t", header=T)
+Clusters_table = "/media/psylab-6028/DATA/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_table.txt"
+Clusters_details <- read.delim("/media/psylab-6028/DATA/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_details.tsv",sep="\t", header=T)
 Clusters_table <- read.delim(Clusters_table,sep="\t", header=T)
 
 go_enrich = enrichmentGO(Clusters_table)
@@ -203,40 +203,39 @@ go_tab = data.frame(
 )
 
 
-
 write.table(kegg_enrich@compareClusterResult,
-            "kegg_rosmap_full1.csv",
+            "kegg_rosmap_constBeta_CT2_TS3.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$BP$enrichment,
-            "go_bp_tab_rosmap_full1.csv",
+            "go_bp_tab_rosmap_constBeta_CT2_TS3.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$CC$enrichment,
-            "go_cc_tab_rosmap_full1.csv",
+            "go_cc_tab_rosmap_constBeta_CT2_TS3.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$MF$enrichment,
-            "go_mf_tab_rosmap_full1.csv",
+            "go_mf_tab_rosmap_constBeta_CT2_TS3.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 
 write.table(go_enrich_filter$enrichmentP,
-            "go_pmat_rosmap_full1.tsv",
+            "go_pmat_rosmap_constBeta_CT2_TS3.tsv",
             sep="\t")
 
 # Save top GO terms per module summary
 write.table(
   go_tab,
-  "go_top_terms_rosmap_full1.csv",
+  "go_top_terms_rosmap_constBeta_CT2_TS3.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE

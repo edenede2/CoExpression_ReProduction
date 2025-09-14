@@ -10,11 +10,20 @@ filtered_samples/
 *.xls
 *.xlsx
 *.txt
+*.html
+*.pdf
 
 # R scripts
 *.rds
 *.RData
-
+outputsValidationPlots/
+nbs/*.csv
+nbs/*.png
+nbs/*.pdf
+notebooks/*.csv
+notebooks/*.png
+notebooks/*.pdf
+notebooks/*.html
 # Python cache
 __pycache__/
 *.pyc

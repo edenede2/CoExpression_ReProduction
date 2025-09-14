@@ -2,6 +2,17 @@ library(WGCNA)
 options(stringsAsFactors = FALSE)
 suppressMessages(WGCNA::allowWGCNAThreads())  
 .extract_donor <- function(x) sub("^([^-]+-[^-]+).*", "\\1", x)
+.print_fit_table <- function(title, df, digits = 3) {
+  line <- paste(rep("=", nchar(title)), collapse = "")
+  cat("\n", line, "\n", title, "\n", line, "\n", sep = "")
+  df2 <- df
+  cols_num <- intersect(c("Power","SFT.R.sq","slope","mean.k","median.k","max.k"),
+                        names(df2))
+  for (cc in cols_num) df2[[cc]] <- round(df2[[cc]], digits)
+  show_cols <- c("Power", "SFT.R.sq", "slope", "mean.k", "median.k", "max.k")
+  show_cols <- show_cols[show_cols %in% names(df2)]
+  print(df2[, show_cols, drop = FALSE], row.names = FALSE)
+}
 
 .aggregate_by_donor <- function(mat) {
     d <- .extract_donor(rownames(mat))
@@ -19,8 +30,8 @@ split_gene_id <- function(x) {
   x <- sub("_PAR_Y$", "", x)
   
 
-  tissue <- sub("_([^_]*)$", "", x)  # הכל עד ה-underscore האחרון
-  gene   <- sub("^.*_", "", x)       # מה שאחרי ה-underscore האחרון
+  tissue <- sub("_([^_]*)$", "", x) 
+  gene   <- sub("^.*_", "", x)       
   list(tissue = tissue, gene = gene)
 }
 .make_CT_map <- function(tissues, beta) {
@@ -29,28 +40,48 @@ split_gene_id <- function(x) {
   keys  <- paste(pairs[,1], pairs[,2], sep = "||")
   setNames(rep.int(beta, length(keys)), keys)
 }
+checkScaleFree_logbin <- function(k, nBreaks = 12, removeFirst = TRUE,
+                                  min_count = 5, drop_top_q = 0.01) {
+  k <- k[is.finite(k) & k > 0]
+  br <- unique(10^seq(log10(min(k)), log10(max(k)), length.out = nBreaks + 1))
+  h  <- hist(k, breaks = br, plot = FALSE, right = TRUE)
+  dk <- h$mids; cnt <- h$counts; p  <- cnt / sum(cnt)
 
-checkScaleFree_logbin <- function(k, nBreaks = 10, removeFirst = FALSE) {
-  kpos <- k[k > 0]                      
-  br <- unique(10^seq(log10(min(kpos)), log10(max(kpos)), length.out = nBreaks + 1))
-  h  <- hist(kpos, breaks = br, plot = FALSE, right = TRUE)
+  logk <- log10(dk); logp <- log10(p + 1e-9)
+  keep <- cnt >= min_count
+  if (drop_top_q > 0) keep <- keep & (logk <= quantile(logk, 1 - drop_top_q, na.rm = TRUE))
+  if (removeFirst && length(keep) >= 1) keep[1] <- FALSE
 
-  dk   <- h$mids                        
-  p.dk <- h$counts / sum(h$counts)
+  logk <- logk[keep]; logp <- logp[keep]; w <- cnt[keep]
+  if (!length(logk) || sum(w) == 0) return(data.frame(Rsquared.SFT=NA, slope.SFT=NA, truncatedExponentialAdjRsquared=NA))
 
-  log.dk  <- log10(dk)
-  if (removeFirst) { log.dk <- log.dk[-1]; p.dk <- p.dk[-1] }
-  log.p   <- log10(p.dk + 1e-9)
-
-  lm1 <- lm(log.p ~ log.dk)
-  lm2 <- lm(log.p ~ log.dk + I(10^log.dk)) 
-
-  data.frame(
-    Rsquared.SFT = summary(lm1)$r.squared,
-    slope.SFT    = coef(lm1)[2],
-    truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared
-  )
+  lm1 <- lm(logp ~ logk, weights = w)
+  lm2 <- lm(logp ~ logk + I(10^logk), weights = w)
+  data.frame(Rsquared.SFT = summary(lm1)$r.squared,
+             slope.SFT    = coef(lm1)[2],
+             truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared)
 }
+# checkScaleFree_logbin <- function(k, nBreaks = 10, removeFirst = FALSE) {
+#   kpos <- k[k > 0]                      
+#   br <- unique(10^seq(log10(min(kpos)), log10(max(kpos)), length.out = nBreaks + 1))
+#   h  <- hist(kpos, breaks = br, plot = FALSE, right = TRUE)
+
+#   dk   <- h$mids                        
+#   p.dk <- h$counts / sum(h$counts)
+
+#   log.dk  <- log10(dk)
+#   if (removeFirst) { log.dk <- log.dk[-1]; p.dk <- p.dk[-1] }
+#   log.p   <- log10(p.dk + 1e-9)
+
+#   lm1 <- lm(log.p ~ log.dk)
+#   lm2 <- lm(log.p ~ log.dk + I(10^log.dk)) 
+
+#   data.frame(
+#     Rsquared.SFT = summary(lm1)$r.squared,
+#     slope.SFT    = coef(lm1)[2],
+#     truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared
+#   )
+# }
 
 checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE) 
 {
@@ -750,7 +781,6 @@ AdjacencyFromExpr <- function(
           msg <- sprintf("Too few common donors between %s and %s (|common|=%f).",
                          tissue_names[i], tissue_names[j], length(common))
           if (ct_too_few_action == "stop") stop(msg)
-          # "zeros": משאירים את הבלוק בריבוע אפסים וממשיכים
           next
         }
 
@@ -1305,7 +1335,6 @@ auto_pick_powers <- function(
         Mi <- donors_list[[i]][common, , drop = FALSE]
         Mj <- donors_list[[j]][common, , drop = FALSE]
 
-        # בתוך הלולאה של CT ב-auto_pick_powers():
         sft_ct <- tryCatch(
           pickSoftThreshold_crossTissue(
             Mi, Mj,
@@ -1315,7 +1344,7 @@ auto_pick_powers <- function(
             nBreaks       = nBreaks,
             removeFirst   = removeFirst,
             use_signed_R2 = use_signed_R2_CT,
-            fisher        = ct_fisher,                 # <-- NEW
+            fisher        = ct_fisher,              
             fisher_scheme = ct_fisher_scheme,
             fisher_Nref   = ct_fisher_Nref,
             fisher_cap    = ct_fisher_cap_at_1,
@@ -1514,6 +1543,7 @@ wgcna_pick_TS <- function(expr_mat,
                           verbose = 5,
                           targetR2 = 0.80,
                           require_neg_slope = TRUE,
+                          TSnBreaks = 50,
                           ...) {
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   # WGCNA expects samples x genes
@@ -1531,6 +1561,7 @@ wgcna_pick_TS <- function(expr_mat,
     corFnc = corFnc,
     corOptions = corOptions,
     verbose = verbose,
+    nBreaks = TSnBreaks,
     ...
   )
 
@@ -1558,7 +1589,6 @@ wgcna_pick_CT_new <- function(
   removeFirst = TRUE,
   min_common = 3L,
   verbose    = 1,
-  # ---- NEW: Fisher controls ----
   fisher        = FALSE,
   fisher_scheme = c("to_ref","lambda"),
   fisher_Nref   = c("median","max"),
@@ -1614,16 +1644,27 @@ wgcna_pick_CT_new <- function(
     A <- .adj_from_cor(S, b, TOMType)
     k <- c(rowSums(A, na.rm = TRUE), colSums(A, na.rm = TRUE))
     k[!is.finite(k)] <- 0
-    sf <- WGCNA::scaleFreeFitIndex(k, nBreaks = nBreaks, removeFirst = removeFirst)
-    fit_df$SFT.R.sq[ix] <- sf$Rsquared.SFT
-    fit_df$slope[ix]    <- sf$slope.SFT
+    # sf <- WGCNA::scaleFreeFitIndex(k, nBreaks = nBreaks, removeFirst = removeFirst)
+    # fit_df$SFT.R.sq[ix] <- sf$Rsquared.SFT
+    # fit_df$slope[ix]    <- sf$slope.SFT
+    cf <- checkScaleFree_logbin(
+      k, nBreaks = nBreaks, removeFirst = removeFirst,
+      min_count = 5, drop_top_q = 0.01
+    )
+    fit_df$SFT.R.sq[ix] <- cf$Rsquared.SFT
+    fit_df$slope[ix]    <- cf$slope.SFT
     fit_df$mean.k[ix]   <- mean(k); fit_df$median.k[ix] <- stats::median(k); fit_df$max.k[ix] <- max(k)
+
   }
 
   ok <- which(!is.na(fit_df$SFT.R.sq) & fit_df$SFT.R.sq >= targetR2)
   if (require_neg_slope) ok <- ok[fit_df$slope[ok] < 0]
   beta_chosen <- if (length(ok)) min(fit_df$Power[ok]) else fit_df$Power[which.max(fit_df$SFT.R.sq)]
-
+  if (isTRUE(verbose)) {
+    ttl <- sprintf("[CT] %s — scale-free fit vs β (target R²=%.2f)", pair_label %||% "pair", targetR2)
+    .print_fit_table(ttl, fit_df)
+    cat(sprintf("Chosen β (CT, %s): %s\n", pair_label %||% "pair", as.integer(beta_chosen)))
+  }
   list(beta = as.integer(beta_chosen), fitIndices = fit_df)
 }
 # Builds a paired expression matrix (samples-in-common x [genes_A | genes_B])
@@ -1742,7 +1783,7 @@ wgcna_auto_pick_powers_new <- function(
   powerVector = seq(0.5, 20, length.out = 20),
   targetR2 = 0.80, require_neg_slope = TRUE, verbose = 5,
   aggregate_by_donor_CT = FALSE, min_common_CT = 3L,
-  ct_nBreaks = 50, ct_removeFirst = TRUE,
+  ct_nBreaks = 50, ct_removeFirst = TRUE, TSnBreaks = 50,
   bicor_maxPOutliers = 1, bicor_robustY = FALSE,
   ct_fisher = FALSE,
   ct_fisher_scheme = c("to_ref","lambda"),
@@ -1767,10 +1808,17 @@ wgcna_auto_pick_powers_new <- function(
   TS_fit_curves <- vector("list", T)
   for (i in seq_len(T)) {
     ts_fit <- tryCatch(
-      wgcna_pick_TS(expr_mat = expr_list[[i]], powerVector = powerVector,
-                    TOMType = TOMType, cor_method = cor_method,
-                    verbose = verbose, targetR2 = targetR2,
-                    require_neg_slope = require_neg_slope),
+      wgcna_pick_TS_new(
+        expr_mat        = expr_list[[i]],
+        powerVector     = powerVector,
+        TOMType         = TOMType,
+        cor_method      = cor_method,
+        targetR2        = targetR2,
+        require_neg_slope = require_neg_slope,
+        nBreaks         = TSnBreaks,
+        verbose         = TRUE,            
+        label           = tissue_names[i]    
+      ),
       error = function(e) { message("[TS] ", tissue_names[i], ": ", e$message); NULL }
     )
     if (!is.null(ts_fit)) {
@@ -1855,7 +1903,6 @@ wgcna_auto_pick_powers <- function(
   targetR2 = 0.80,
   require_neg_slope = TRUE,
   verbose = 5,
-  # ---- CT-specific knobs ----
   aggregate_by_donor_CT = FALSE,
   min_common_CT = 3L,
   ct_nBreaks = 50,
@@ -1866,7 +1913,6 @@ wgcna_auto_pick_powers <- function(
   stopifnot(length(tissue_names) == length(tissue_expr_file_names))
   T <- length(tissue_names)
 
-  # Load & prefilter expression per tissue (samples x genes)
   expr_list <- vector("list", T)
   names(expr_list) <- tissue_names
   message("Loading expression data for ", T, " tissues…")
@@ -2502,7 +2548,9 @@ XWGCNA_Clusters_autoBeta <- function(
           verbose = 5,
           aggregate_by_donor_CT = aggregate_by_donor_CT,
           min_common_CT = ct_min_common,
-          ct_nBreaks = 12,
+          TSnBreaks = scaleFree_nBreaks,
+          ct_nBreaks = scaleFree_nBreaks,
+          ct_removeFirst = scaleFree_removeFirst,
           ct_fisher = ct_fisher,
           ct_fisher_scheme = ct_fisher_scheme,
           ct_fisher_Nref = ct_fisher_Nref,
