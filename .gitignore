@@ -12,7 +12,7 @@ filtered_samples/
 *.txt
 *.html
 *.pdf
-
+*.zip
 # R scripts
 *.rds
 *.RData
