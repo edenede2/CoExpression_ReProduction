@@ -182,8 +182,8 @@ enrichmentKegg = function(modules) {
 
 
 # ---------------------------------------------
-Clusters_table = "/media/psylab-6028/DATA/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_table.txt"
-Clusters_details <- read.delim("/media/psylab-6028/DATA/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_details.tsv",sep="\t", header=T)
+Clusters_table = "/media/psylab-6028/Transcend/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_table.tsv"
+Clusters_details <- read.delim("/media/psylab-6028/Transcend/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_details.tsv",sep="\t", header=T)
 Clusters_table <- read.delim(Clusters_table,sep="\t", header=T)
 
 go_enrich = enrichmentGO(Clusters_table)

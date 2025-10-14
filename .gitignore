@@ -13,6 +13,10 @@ filtered_samples/
 *.html
 *.pdf
 *.zip
+*.parquet
+
+notebooks/*.pdf
+notebooks/*.html
 # R scripts
 *.rds
 *.RData
