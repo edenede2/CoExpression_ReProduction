@@ -4,7 +4,7 @@
 # Finds lowest beta above threhshold
 
 # This code uses functions from skoplev/starnet Repository
-# Repository URL: https://github.com/skoplev/starnet
+# Repository URL: https:  //github.com/skoplev/starnet
 # Author(s): Simon Koplev
 # License: GNU General Public License v3.0 (GPLv3)
 # The original code has been modified for this project.
