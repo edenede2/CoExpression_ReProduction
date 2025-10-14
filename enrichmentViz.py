@@ -6,6 +6,7 @@ from matplotlib.patches import Patch
 import seaborn as sns
 import matplotlib.patheffects as pe
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+import json
 
 
 
@@ -463,19 +464,20 @@ def export_kegg_ts_ct_enrichment_pdf(
     
     def place_leg(ax, handles, title, y_top, fs):
         if not handles: return y_top
-        est_h = 0.035 * (len(handles) + 2)
+        est_h = 0.025 * (len(handles) + 2)
         leg = ax.legend(handles=handles, title=title, loc="upper left",
                         bbox_to_anchor=(0.0, y_top), fontsize=fs, title_fontsize=fs+1, frameon=False)
         ax.add_artist(leg)
-        return max(0.02, y_top - est_h)
+        return max(0.01, y_top - est_h)
 
     y = 0.98
-    y = place_leg(ax_leg, handles_cat,     "Category",     y, legend_fontsize)
-    y = place_leg(ax_leg, handles_sub,     "Subcategory",  y, legend_fontsize)
     if show_region_legend:
         handles_regions = [Patch(facecolor=region_color_map[r], edgecolor='none', label=str(r)) for r in regions]
-        _ = place_leg(ax_leg, handles_regions, "Regions (hist)", y, legend_fontsize)
-
+        y = place_leg(ax_leg, handles_regions, "Regions (hist)", y, legend_fontsize)
+    
+    y = place_leg(ax_leg, handles_cat,     "Category",     y, legend_fontsize)
+    y = place_leg(ax_leg, handles_sub,     "Subcategory",  y, legend_fontsize)
+    
 
     plt.subplots_adjust(left=0.05, right=0.98, top=0.95, bottom=0.06, wspace=0.02, hspace=0.02)
     fig.savefig(pdf_path, dpi=300, bbox_inches="tight")
@@ -754,27 +756,35 @@ def _cluster_orders(logp_df, row_meta,
                 cum_len += len(reord)
 
     return row_order, col_order, sep_positions
+def load_kegg_annotation_palettes(json_path):
+    with open(json_path, "r", encoding="utf-8") as f:
+        d = json.load(f)
+    # המרה ל-tuples אם נטען כרשימות
+    pc = {k: tuple(v) for k, v in d.get("category", {}).items()}
+    ps = {k: tuple(v) for k, v in d.get("subcategory", {}).items()}
+    return pc, ps
 
 
 
 if __name__ == "__main__":
 
-    KEGG_CSV = r"/Users/edeneldar/Downloads/kegg_rosmap_full_V4.csv"
+    KEGG_CSV = r"/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/My Drive/ROSMAP_Data/RNAseq_RISK_BrainRegions_STasaki/outputs/kegg_rosmap_constBeta_CT2_TS3.csv"
 
-    MODULES = "/Users/edeneldar/Downloads/tryRosmap_Cluster_details3.tsv"
+    MODULES = "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/My Drive/ROSMAP_Data/RNAseq_RISK_BrainRegions_STasaki/outputs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_details.tsv"
 
-    palette_cat, palette_sub = build_annotation_palettes_from_kegg(KEGG_CSV)
+    palette_cat, palette_sub =  load_kegg_annotation_palettes("/Users/edeneldar/CoExpression_ReProduction/keg_palette/kegg_palette.json")
 
     fig, ts_rows, ts_cols, ct_rows, ct_cols = export_kegg_ts_ct_enrichment_pdf(
         kegg_long_csv=KEGG_CSV,
         modules_details_tsv=MODULES,
-        pdf_path="kegg_TS_CT_enrichment_between_V4.pdf",
-        selection="global_top", K_GLOBAL=60, cap=4.0,
-        cluster_cols=True, cluster_rows=True, row_grouping=(None),
+        pdf_path="kegg_TS_CT_enrichment_cos_onrow_between_V9.pdf",
+        selection="global_top", K_GLOBAL=999999999, cap=4.0,
+        cluster_cols=True, cluster_rows=True, row_grouping=(None), col_metric="cosine", col_method="average",
+        row_metric="euclidean", row_method="average",
         add_hist=True,
         hist_stacked_regions=True,
         hist_regions_cols=(["AC","MFBA9BA46","PCGBA23"]),
-        hist_region_colors={"AC":"#88CCEE","MFBA9BA46":"#CC6677","PCGBA23":"#DDCC77"},
+        hist_region_colors={"AC":"#342AFF","MFBA9BA46":"#FF9924","PCGBA23":"#5AF346"},
         palette_cat=palette_cat, palette_sub=palette_sub,
         build_matrix_fn=build_kegg_logp_matrix,
         ts_exclude_modules=[],           
