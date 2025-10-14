@@ -15,12 +15,15 @@ filtered_samples/
 *.zip
 *.parquet
 *.png
+*.DS_Store
+
 
 # notebooks/*.pdf
 # notebooks/*.html
 # R scripts
 *.rds
 *.RData
+*.Rhistory
 outputsValidationPlots/
 # nbs/*.csv
 # nbs/*.png
