@@ -182,9 +182,12 @@ enrichmentKegg = function(modules) {
 
 
 # ---------------------------------------------
-Clusters_table = "/media/psylab-6028/Transcend/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_table.tsv"
-Clusters_details <- read.delim("/media/psylab-6028/Transcend/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_details.tsv",sep="\t", header=T)
-Clusters_table <- read.delim(Clusters_table,sep="\t", header=T)
+# Clusters_table = "/media/psylab-6028/DATA1/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_muscles_full_v3_Cluster_table.tsv"
+# Clusters_details <- read.delim("/media/psylab-6028/DATA1/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_muscles_full_v3_Cluster_details.tsv",sep="\t", header=T)
+# Clusters_table <- read.delim(Clusters_table,sep="\t", header=T)
+Clusters_table = "/media/psylab-6028/DATA1/Eden/speakeasyR/SLabPL/speakeasy_clusters/speakeasy_clusters_table_2.csv"
+Clusters_details <- read.delim("/media/psylab-6028/DATA1/Eden/speakeasyR/SLabPL/speakeasy_clusters/speakeasy_clusters_details_2.tsv",sep="\t", header=T)
+Clusters_table <- read.delim(Clusters_table,sep=",", header=T)
 
 go_enrich = enrichmentGO(Clusters_table)
 go_enrich_filter = filterCommonGOTerms(go_enrich, 50)
@@ -204,38 +207,38 @@ go_tab = data.frame(
 
 
 write.table(kegg_enrich@compareClusterResult,
-            "kegg_rosmap_constBeta_CT2_TS3.csv",
+            "kegg_rosmap_brains_se2_res2.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$BP$enrichment,
-            "go_bp_tab_rosmap_constBeta_CT2_TS3.csv",
+            "go_bp_tab_rosmap_brains_se2_res2.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$CC$enrichment,
-            "go_cc_tab_rosmap_constBeta_CT2_TS3.csv",
+            "go_cc_tab_rosmap_brains_se2_res2.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 write.table(go_enrich_filter$bestPTerms$MF$enrichment,
-            "go_mf_tab_rosmap_constBeta_CT2_TS3.csv",
+            "go_mf_tab_rosmap_brains_se2_res2.csv",
             sep=",",
             quote=FALSE,
             row.names=FALSE)
 
 
 write.table(go_enrich_filter$enrichmentP,
-            "go_pmat_rosmap_constBeta_CT2_TS3.tsv",
+            "go_pmat_rosmap_brains_se2_res2.tsv",
             sep="\t")
 
 # Save top GO terms per module summary
 write.table(
   go_tab,
-  "go_top_terms_rosmap_constBeta_CT2_TS3.csv",
+  "go_top_terms_rosmap_brains_se2_res2.csv",
   sep = ",",
   quote = FALSE,
   row.names = FALSE

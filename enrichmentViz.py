@@ -768,18 +768,18 @@ def load_kegg_annotation_palettes(json_path):
 
 if __name__ == "__main__":
 
-    KEGG_CSV = r"/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/My Drive/ROSMAP_Data/RNAseq_RISK_BrainRegions_STasaki/outputs/kegg_rosmap_constBeta_CT2_TS3.csv"
+    KEGG_CSV = r"/media/psylab-6028/DATA1/Eden/kegg_rosmap_brains_se2.csv"
 
-    MODULES = "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/My Drive/ROSMAP_Data/RNAseq_RISK_BrainRegions_STasaki/outputs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_details.tsv"
+    MODULES = "/media/psylab-6028/DATA1/Eden/speakeasyR/SLabPL/speakeasy_clusters/speakeasy_clusters_details_2.tsv"
 
-    palette_cat, palette_sub =  load_kegg_annotation_palettes("/Users/edeneldar/CoExpression_ReProduction/keg_palette/kegg_palette.json")
+    palette_cat, palette_sub =  load_kegg_annotation_palettes("/media/psylab-6028/DATA1/Eden/CoExpression_ReProduction/notebooks/kegg_palette_se2.json")
 
     fig, ts_rows, ts_cols, ct_rows, ct_cols = export_kegg_ts_ct_enrichment_pdf(
         kegg_long_csv=KEGG_CSV,
         modules_details_tsv=MODULES,
-        pdf_path="kegg_TS_CT_enrichment_cos_onrow_between_V9.pdf",
+        pdf_path="/media/psylab-6028/DATA1/Eden/kegg_se2_res2_enrichment_cos_prop_whitine.pdf",
         selection="global_top", K_GLOBAL=999999999, cap=4.0,
-        cluster_cols=True, cluster_rows=True, row_grouping=(None), col_metric="cosine", col_method="average",
+        cluster_cols=True, cluster_rows=True, row_grouping=(['category','subcategory']), col_metric="cosine", col_method="average",
         row_metric="euclidean", row_method="average",
         add_hist=True,
         hist_stacked_regions=True,

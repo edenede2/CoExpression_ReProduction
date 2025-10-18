@@ -2685,7 +2685,14 @@ XWGCNA_Clusters_autoBeta <- function(
     ct_fisher_lambda = 10,
     ct_min_common = 3L,
     ct_too_few_action = c("stop","zeros"),
-    adj_type = "old"
+    adj_type = "old",
+    ct_use_all_donors = FALSE,
+    ct_use_corshrink  = TRUE,
+    corshrink_max_p = 6000,
+    block_B = 800L,
+    parallel = TRUE,
+    n_cores = 16L,
+    preallocate_matrices = TRUE
 ){
     ct_fisher_scheme  <- match.arg(ct_fisher_scheme)
     ct_too_few_action <- match.arg(ct_too_few_action)
@@ -2797,13 +2804,21 @@ XWGCNA_Clusters_autoBeta <- function(
         CT_power_map = CT_map,
         default_TS = TS_power,
         default_CT = CT_power,
-        ct_fisher = ct_fisher,
-        ct_fisher_scheme = ct_fisher_scheme,
-        ct_fisher_Nref = ct_fisher_Nref,
-        ct_fisher_cap = ct_fisher_cap_at_1,
-        ct_fisher_lambda = ct_fisher_lambda,
         ct_min_common = ct_min_common,
-        ct_too_few_action = ct_too_few_action
+        ct_too_few_action = ct_too_few_action,
+        ct_use_all_donors = ct_use_all_donors,
+        ct_use_corshrink  = ct_use_corshrink,
+        plot_CT_beta_before_after = TRUE,
+        powerVector_for_plots = wgcna_powerVector,
+        TOMType_for_plots = TOMType,
+        beta_curves_dir = "plots_corshrink",
+        save_intermediates = save_intermediates,
+        out_prefix = out_prefix,
+        block_B = block_B,
+        corshrink_max_p = corshrink_max_p,
+        use_parallel = parallel,
+        n_cores = n_cores,
+        preallocate_matrices = preallocate_matrices
     )
     } else {
       adj_mat <- AdjacencyFromExprold(
