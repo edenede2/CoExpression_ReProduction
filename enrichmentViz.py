@@ -759,18 +759,18 @@ def _cluster_orders(logp_df, row_meta,
 
 if __name__ == "__main__":
 
-    KEGG_CSV = r"/Users/edeneldar/Downloads/kegg_rosmap_full_V4.csv"
+    KEGG_CSV = r"/Volumes/Transcend/ROSMAP_WGCNA/kegg_rosmap_brains_se2_res2.csv"
 
-    MODULES = "/Users/edeneldar/Downloads/tryRosmap_Cluster_details3.tsv"
+    MODULES = "/Users/edeneldar/Library/CloudStorage/GoogleDrive-edenede2@gmail.com/My Drive/ROSMAP_Data/RNAseq_RISK_BrainRegions_STasaki/outputs/speakeasy_clusters/speakeasy_clusters_details_2.tsv"
 
     palette_cat, palette_sub = build_annotation_palettes_from_kegg(KEGG_CSV)
 
     fig, ts_rows, ts_cols, ct_rows, ct_cols = export_kegg_ts_ct_enrichment_pdf(
         kegg_long_csv=KEGG_CSV,
         modules_details_tsv=MODULES,
-        pdf_path="kegg_TS_CT_enrichment_between_V4.pdf",
+        pdf_path="kegg_se2_res2_new_enrichment_within_V4.pdf",
         selection="global_top", K_GLOBAL=60, cap=4.0,
-        cluster_cols=True, cluster_rows=True, row_grouping=(None),
+        cluster_cols=True, cluster_rows=True, row_grouping=(['category','subcategory']),
         add_hist=True,
         hist_stacked_regions=True,
         hist_regions_cols=(["AC","MFBA9BA46","PCGBA23"]),

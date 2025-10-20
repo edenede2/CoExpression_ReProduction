@@ -10,6 +10,10 @@ filtered_samples/
 *.xls
 *.xlsx
 *.txt
+*.pdf
+*.png
+
+*.DS_Store
 
 # R scripts
 *.rds
