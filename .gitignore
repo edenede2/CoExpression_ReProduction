@@ -10,15 +10,28 @@ filtered_samples/
 *.xls
 *.xlsx
 *.txt
+*.html
 *.pdf
+*.zip
+*.parquet
 *.png
-
 *.DS_Store
 
+
+# notebooks/*.pdf
+# notebooks/*.html
 # R scripts
 *.rds
 *.RData
-
+*.Rhistory
+outputsValidationPlots/
+# nbs/*.csv
+# nbs/*.png
+# nbs/*.pdf
+# notebooks/*.csv
+# notebooks/*.png
+# notebooks/*.pdf
+# notebooks/*.html
 # Python cache
 __pycache__/
 *.pyc

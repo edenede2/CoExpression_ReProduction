@@ -2,6 +2,17 @@ library(WGCNA)
 options(stringsAsFactors = FALSE)
 suppressMessages(WGCNA::allowWGCNAThreads())  
 .extract_donor <- function(x) sub("^([^-]+-[^-]+).*", "\\1", x)
+.print_fit_table <- function(title, df, digits = 3) {
+  line <- paste(rep("=", nchar(title)), collapse = "")
+  cat("\n", line, "\n", title, "\n", line, "\n", sep = "")
+  df2 <- df
+  cols_num <- intersect(c("Power","SFT.R.sq","slope","mean.k","median.k","max.k"),
+                        names(df2))
+  for (cc in cols_num) df2[[cc]] <- round(df2[[cc]], digits)
+  show_cols <- c("Power", "SFT.R.sq", "slope", "mean.k", "median.k", "max.k")
+  show_cols <- show_cols[show_cols %in% names(df2)]
+  print(df2[, show_cols, drop = FALSE], row.names = FALSE)
+}
 
 .aggregate_by_donor <- function(mat) {
     d <- .extract_donor(rownames(mat))
@@ -19,8 +30,8 @@ split_gene_id <- function(x) {
   x <- sub("_PAR_Y$", "", x)
   
 
-  tissue <- sub("_([^_]*)$", "", x)  # הכל עד ה-underscore האחרון
-  gene   <- sub("^.*_", "", x)       # מה שאחרי ה-underscore האחרון
+  tissue <- sub("_([^_]*)$", "", x) 
+  gene   <- sub("^.*_", "", x)       
   list(tissue = tissue, gene = gene)
 }
 .make_CT_map <- function(tissues, beta) {
@@ -29,28 +40,48 @@ split_gene_id <- function(x) {
   keys  <- paste(pairs[,1], pairs[,2], sep = "||")
   setNames(rep.int(beta, length(keys)), keys)
 }
+checkScaleFree_logbin <- function(k, nBreaks = 12, removeFirst = TRUE,
+                                  min_count = 5, drop_top_q = 0.01) {
+  k <- k[is.finite(k) & k > 0]
+  br <- unique(10^seq(log10(min(k)), log10(max(k)), length.out = nBreaks + 1))
+  h  <- hist(k, breaks = br, plot = FALSE, right = TRUE)
+  dk <- h$mids; cnt <- h$counts; p  <- cnt / sum(cnt)
 
-checkScaleFree_logbin <- function(k, nBreaks = 10, removeFirst = FALSE) {
-  kpos <- k[k > 0]                      
-  br <- unique(10^seq(log10(min(kpos)), log10(max(kpos)), length.out = nBreaks + 1))
-  h  <- hist(kpos, breaks = br, plot = FALSE, right = TRUE)
+  logk <- log10(dk); logp <- log10(p + 1e-9)
+  keep <- cnt >= min_count
+  if (drop_top_q > 0) keep <- keep & (logk <= quantile(logk, 1 - drop_top_q, na.rm = TRUE))
+  if (removeFirst && length(keep) >= 1) keep[1] <- FALSE
 
-  dk   <- h$mids                        
-  p.dk <- h$counts / sum(h$counts)
+  logk <- logk[keep]; logp <- logp[keep]; w <- cnt[keep]
+  if (!length(logk) || sum(w) == 0) return(data.frame(Rsquared.SFT=NA, slope.SFT=NA, truncatedExponentialAdjRsquared=NA))
 
-  log.dk  <- log10(dk)
-  if (removeFirst) { log.dk <- log.dk[-1]; p.dk <- p.dk[-1] }
-  log.p   <- log10(p.dk + 1e-9)
-
-  lm1 <- lm(log.p ~ log.dk)
-  lm2 <- lm(log.p ~ log.dk + I(10^log.dk)) 
-
-  data.frame(
-    Rsquared.SFT = summary(lm1)$r.squared,
-    slope.SFT    = coef(lm1)[2],
-    truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared
-  )
+  lm1 <- lm(logp ~ logk, weights = w)
+  lm2 <- lm(logp ~ logk + I(10^logk), weights = w)
+  data.frame(Rsquared.SFT = summary(lm1)$r.squared,
+             slope.SFT    = coef(lm1)[2],
+             truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared)
 }
+# checkScaleFree_logbin <- function(k, nBreaks = 10, removeFirst = FALSE) {
+#   kpos <- k[k > 0]                      
+#   br <- unique(10^seq(log10(min(kpos)), log10(max(kpos)), length.out = nBreaks + 1))
+#   h  <- hist(kpos, breaks = br, plot = FALSE, right = TRUE)
+
+#   dk   <- h$mids                        
+#   p.dk <- h$counts / sum(h$counts)
+
+#   log.dk  <- log10(dk)
+#   if (removeFirst) { log.dk <- log.dk[-1]; p.dk <- p.dk[-1] }
+#   log.p   <- log10(p.dk + 1e-9)
+
+#   lm1 <- lm(log.p ~ log.dk)
+#   lm2 <- lm(log.p ~ log.dk + I(10^log.dk)) 
+
+#   data.frame(
+#     Rsquared.SFT = summary(lm1)$r.squared,
+#     slope.SFT    = coef(lm1)[2],
+#     truncatedExponentialAdjRsquared = summary(lm2)$adj.r.squared
+#   )
+# }
 
 checkScaleFree <- function (k, nBreaks = 10, removeFirst = FALSE) 
 {
@@ -681,7 +712,8 @@ AdjacencyFromExpr <- function(
     ct_fisher_cap_at_1 = TRUE,
     ct_fisher_lambda   = 10,
     ct_min_common      = 3L,
-    ct_too_few_action  = c("stop","zeros")
+    ct_too_few_action  = c("stop","zeros"),
+    signed = FALSE
 ) {
   ct_fisher_scheme  <- match.arg(ct_fisher_scheme)
   ct_too_few_action <- match.arg(ct_too_few_action)
@@ -722,6 +754,7 @@ AdjacencyFromExpr <- function(
     Sii <- abs(cor(
       expr_list[[i]], use = "pairwise.complete.obs", method = cor_method
     ))
+    
     diag(Sii) <- 0
     A[rows, rows] <- Sii^pow_i
   }
@@ -750,7 +783,6 @@ AdjacencyFromExpr <- function(
           msg <- sprintf("Too few common donors between %s and %s (|common|=%f).",
                          tissue_names[i], tissue_names[j], length(common))
           if (ct_too_few_action == "stop") stop(msg)
-          # "zeros": משאירים את הבלוק בריבוע אפסים וממשיכים
           next
         }
 
@@ -1305,7 +1337,6 @@ auto_pick_powers <- function(
         Mi <- donors_list[[i]][common, , drop = FALSE]
         Mj <- donors_list[[j]][common, , drop = FALSE]
 
-        # בתוך הלולאה של CT ב-auto_pick_powers():
         sft_ct <- tryCatch(
           pickSoftThreshold_crossTissue(
             Mi, Mj,
@@ -1315,7 +1346,7 @@ auto_pick_powers <- function(
             nBreaks       = nBreaks,
             removeFirst   = removeFirst,
             use_signed_R2 = use_signed_R2_CT,
-            fisher        = ct_fisher,                 # <-- NEW
+            fisher        = ct_fisher,              
             fisher_scheme = ct_fisher_scheme,
             fisher_Nref   = ct_fisher_Nref,
             fisher_cap    = ct_fisher_cap_at_1,
@@ -1514,6 +1545,7 @@ wgcna_pick_TS <- function(expr_mat,
                           verbose = 5,
                           targetR2 = 0.80,
                           require_neg_slope = TRUE,
+                          TSnBreaks = 50,
                           ...) {
   stopifnot(is.matrix(expr_mat) || is.data.frame(expr_mat))
   # WGCNA expects samples x genes
@@ -1524,15 +1556,22 @@ wgcna_pick_TS <- function(expr_mat,
   else
     list(use = "pairwise.complete.obs", maxPOutliers = 1, robustY = FALSE)
 
-  sft <- WGCNA::pickSoftThreshold(
-    data = expr_mat,
-    powerVector = powerVector,
-    networkType = .networkType_from_TOMType(TOMType),
-    corFnc = corFnc,
-    corOptions = corOptions,
-    verbose = verbose,
-    ...
-  )
+  # Extract any additional arguments but remove nBreaks to avoid conflicts
+  extra_args <- list(...)
+  extra_args$nBreaks <- NULL  # Remove nBreaks if present to avoid conflict
+  
+  sft <- do.call(WGCNA::pickSoftThreshold, c(
+    list(
+      data = expr_mat,
+      powerVector = powerVector,
+      networkType = .networkType_from_TOMType(TOMType),
+      corFnc = corFnc,
+      corOptions = corOptions,
+      verbose = verbose,
+      nBreaks = TSnBreaks
+    ),
+    extra_args
+  ))
 
   chosen <- .wgcna_choose_beta_min_above(sft, targetR2 = targetR2,
                                          require_neg_slope = require_neg_slope)
@@ -1558,7 +1597,6 @@ wgcna_pick_CT_new <- function(
   removeFirst = TRUE,
   min_common = 3L,
   verbose    = 1,
-  # ---- NEW: Fisher controls ----
   fisher        = FALSE,
   fisher_scheme = c("to_ref","lambda"),
   fisher_Nref   = c("median","max"),
@@ -1617,13 +1655,24 @@ wgcna_pick_CT_new <- function(
     sf <- WGCNA::scaleFreeFitIndex(k, nBreaks = nBreaks, removeFirst = removeFirst)
     fit_df$SFT.R.sq[ix] <- sf$Rsquared.SFT
     fit_df$slope[ix]    <- sf$slope.SFT
+    # cf <- checkScaleFree_logbin(
+    #   k, nBreaks = nBreaks, removeFirst = removeFirst,
+    #   min_count = 5, drop_top_q = 0.01
+    # )
+    # fit_df$SFT.R.sq[ix] <- cf$Rsquared.SFT
+    # fit_df$slope[ix]    <- cf$slope.SFT
     fit_df$mean.k[ix]   <- mean(k); fit_df$median.k[ix] <- stats::median(k); fit_df$max.k[ix] <- max(k)
+
   }
 
   ok <- which(!is.na(fit_df$SFT.R.sq) & fit_df$SFT.R.sq >= targetR2)
   if (require_neg_slope) ok <- ok[fit_df$slope[ok] < 0]
   beta_chosen <- if (length(ok)) min(fit_df$Power[ok]) else fit_df$Power[which.max(fit_df$SFT.R.sq)]
-
+  if (isTRUE(verbose)) {
+    ttl <- sprintf("[CT] %s — scale-free fit vs β (target R²=%.2f)", pair_label %||% "pair", targetR2)
+    .print_fit_table(ttl, fit_df)
+    cat(sprintf("Chosen β (CT, %s): %s\n", pair_label %||% "pair", as.integer(beta_chosen)))
+  }
   list(beta = as.integer(beta_chosen), fitIndices = fit_df)
 }
 # Builds a paired expression matrix (samples-in-common x [genes_A | genes_B])
@@ -1742,7 +1791,7 @@ wgcna_auto_pick_powers_new <- function(
   powerVector = seq(0.5, 20, length.out = 20),
   targetR2 = 0.80, require_neg_slope = TRUE, verbose = 5,
   aggregate_by_donor_CT = FALSE, min_common_CT = 3L,
-  ct_nBreaks = 50, ct_removeFirst = TRUE,
+  ct_nBreaks = 50, ct_removeFirst = TRUE, TSnBreaks = 50,
   bicor_maxPOutliers = 1, bicor_robustY = FALSE,
   ct_fisher = FALSE,
   ct_fisher_scheme = c("to_ref","lambda"),
@@ -1767,10 +1816,16 @@ wgcna_auto_pick_powers_new <- function(
   TS_fit_curves <- vector("list", T)
   for (i in seq_len(T)) {
     ts_fit <- tryCatch(
-      wgcna_pick_TS(expr_mat = expr_list[[i]], powerVector = powerVector,
-                    TOMType = TOMType, cor_method = cor_method,
-                    verbose = verbose, targetR2 = targetR2,
-                    require_neg_slope = require_neg_slope),
+      wgcna_pick_TS(
+        expr_mat        = expr_list[[i]],
+        powerVector     = powerVector,
+        TOMType         = TOMType,
+        cor_method      = cor_method,
+        targetR2        = targetR2,
+        require_neg_slope = require_neg_slope,
+        TSnBreaks       = TSnBreaks,
+        verbose         = verbose
+      ),
       error = function(e) { message("[TS] ", tissue_names[i], ": ", e$message); NULL }
     )
     if (!is.null(ts_fit)) {
@@ -1855,7 +1910,6 @@ wgcna_auto_pick_powers <- function(
   targetR2 = 0.80,
   require_neg_slope = TRUE,
   verbose = 5,
-  # ---- CT-specific knobs ----
   aggregate_by_donor_CT = FALSE,
   min_common_CT = 3L,
   ct_nBreaks = 50,
@@ -1866,7 +1920,6 @@ wgcna_auto_pick_powers <- function(
   stopifnot(length(tissue_names) == length(tissue_expr_file_names))
   T <- length(tissue_names)
 
-  # Load & prefilter expression per tissue (samples x genes)
   expr_list <- vector("list", T)
   names(expr_list) <- tissue_names
   message("Loading expression data for ", T, " tissues…")
@@ -2442,6 +2495,160 @@ run_kME_and_core_bridge <- function(
   export_kME_and_classes(kME_list, classes_df, out_prefix = out_prefix)
   list(kME = kME_list, classes = classes_df)
 }
+# -------- 1) Build donor matrices and intersect donors --------
+build_donor_mats_and_common <- function(tissue_names, tissue_expr_file_names,
+                                        sd_quantile = 0.00, max_genes_per_tissue = 5000) {
+  stopifnot(length(tissue_names) == length(tissue_expr_file_names))
+  T <- length(tissue_names)
+  donor_mats <- setNames(vector("list", T), tissue_names)
+  for (i in seq_len(T)) {
+    X <- LoadExprData(tissue_names[i], tissue_expr_file_names[i],
+                      sd_quantile = sd_quantile,
+                      max_genes_per_tissue = max_genes_per_tissue)
+    donor_mats[[i]] <- .aggregate_by_donor(X)  # rows=donors, cols=tissue_gene
+  }
+  donors_common <- Reduce(intersect, lapply(donor_mats, rownames))
+  if (!length(donors_common)) stop("No donors are shared by all tissues.")
+  # enforce identical donor order everywhere
+  donor_mats <- lapply(donor_mats, function(M) M[donors_common, , drop = FALSE])
+  list(donor_mats = donor_mats, donors_common = donors_common)
+}
+
+# -------- 2) Module gene metadata (you already have build_gene_metadata) --------
+# Uses your 'clusters_table' to create gene_id = tissue_gene and module_id = M<id>
+
+# -------- 3) Per-tissue MEs on common donors --------
+compute_MEs_per_tissue_common <- function(gene_meta, donor_mats,
+                                          min_genes_for_ME = 1L, center_scale = TRUE) {
+  tissues <- names(donor_mats)
+  modules <- sort(unique(gene_meta$module_id))
+
+  # Prepare empty outputs per tissue with aligned donor rows
+  MEs_by_tissue <- setNames(
+    lapply(donor_mats, function(M) {
+      data.frame(row.names = rownames(M), check.names = FALSE)
+    }),
+    tissues
+  )
+
+  .pc1 <- function(X) {
+    X <- as.matrix(X)
+    if (center_scale) X <- scale(X, center = TRUE, scale = TRUE)
+    if (ncol(X) == 1L) return(as.numeric(X[,1]))
+    pr <- suppressWarnings(prcomp(X, center = FALSE, scale. = FALSE))
+    as.numeric(pr$x[,1])
+  }
+
+  for (m in modules) {
+    gm <- gene_meta[gene_meta$module_id == m, , drop = FALSE]
+    for (tt in tissues) {
+      ids_tt <- gm$gene_id[gm$Tissue == tt]
+      ids_tt <- intersect(ids_tt, colnames(donor_mats[[tt]]))
+      if (length(ids_tt) >= min_genes_for_ME) {
+        me <- .pc1(donor_mats[[tt]][, ids_tt, drop = FALSE])
+        MEs_by_tissue[[tt]][, m] <- me
+        colnames(MEs_by_tissue[[tt]])[ncol(MEs_by_tissue[[tt]])] <- m
+      }
+    }
+  }
+  MEs_by_tissue
+}
+
+# -------- 4) Cross-tissue (global) ME per module on common donors (optional) --------
+compute_MEs_cross_tissue_common <- function(gene_meta, donor_mats,
+                                            min_genes_for_ME = 2L, center_scale = TRUE) {
+  modules <- sort(unique(gene_meta$module_id))
+  donors  <- rownames(donor_mats[[1]])
+
+  .pc1 <- function(X) {
+    X <- as.matrix(X)
+    if (center_scale) X <- scale(X, center = TRUE, scale = TRUE)
+    if (ncol(X) == 1L) return(as.numeric(X[,1]))
+    pr <- suppressWarnings(prcomp(X, center = FALSE, scale. = FALSE))
+    as.numeric(pr$x[,1])
+  }
+
+  # Sanity: donor_mats must be a *named* list whose names are tissues
+  if (is.null(names(donor_mats)) || any(names(donor_mats) == "")) {
+    stop("donor_mats must be a named list with tissue names.")
+  }
+
+  # Sanity: all tissues in gene_meta should exist in donor_mats
+  tt_needed <- unique(gene_meta$Tissue)
+  if (!all(tt_needed %in% names(donor_mats))) {
+    missing_tt <- setdiff(tt_needed, names(donor_mats))
+    stop("Missing donor matrices for tissues: ", paste(missing_tt, collapse = ", "))
+  }
+
+  ME_global <- data.frame(row.names = donors, check.names = FALSE)
+
+  for (m in modules) {
+    gm <- gene_meta[gene_meta$module_id == m, , drop = FALSE]
+
+    # Collect module genes from *each* tissue, in a safe way
+    Xlist <- list()
+    for (tt in names(donor_mats)) {
+      ids_tt <- gm$gene_id[gm$Tissue == tt]
+      ids_tt <- intersect(ids_tt, colnames(donor_mats[[tt]]))
+      if (length(ids_tt)) Xlist[[tt]] <- donor_mats[[tt]][, ids_tt, drop = FALSE]
+    }
+
+    if (length(Xlist)) {
+      X <- do.call(cbind, Xlist)
+      if (ncol(X) >= min_genes_for_ME) {
+        ME_global[, m] <- .pc1(X)
+        colnames(ME_global)[ncol(ME_global)] <- m
+      }
+    }
+  }
+
+  ME_global
+}
+# -------- 5) Convenience wrapper to run everything end-to-end --------
+# clusters_table is what your Clusters_Table() returned.
+compute_all_module_eigengenes_common <- function(
+  tissue_names, tissue_expr_file_names, clusters_table,
+  sd_quantile = 0.00, max_genes_per_tissue = 5000,
+  min_genes_for_ME = 1L, center_scale = TRUE,
+  export_prefix = "xwgcna_ME_common"
+){
+  # Build donor mats + donors intersection
+  tmp <- build_donor_mats_and_common(tissue_names, tissue_expr_file_names,
+                                     sd_quantile, max_genes_per_tissue)
+  donor_mats <- tmp$donor_mats
+
+  # Gene metadata from your clusters table
+  gene_meta <- build_gene_metadata(clusters_table)
+
+  # Per-tissue MEs on common donors
+  MEs_by_tissue <- compute_MEs_per_tissue_common(
+    gene_meta, donor_mats,
+    min_genes_for_ME = min_genes_for_ME, center_scale = center_scale
+  )
+
+  # Cross-tissue (global) MEs on common donors
+  MEs_global <- compute_MEs_cross_tissue_common(
+    gene_meta, donor_mats,
+    min_genes_for_ME = max(2L, min_genes_for_ME), center_scale = center_scale
+  )
+
+  # Export: one file per tissue + one global
+  for (tt in names(MEs_by_tissue)) {
+    if (!ncol(MEs_by_tissue[[tt]])) next
+    fn <- paste0(export_prefix, "_", tt, "_per_tissue.tsv")
+    write.table(cbind(donor = rownames(MEs_by_tissue[[tt]]), MEs_by_tissue[[tt]]),
+                file = fn, sep = "\t", quote = FALSE, row.names = FALSE)
+  }
+  if (ncol(MEs_global)) {
+    fn <- paste0(export_prefix, "_cross_tissue.tsv")
+    write.table(cbind(donor = rownames(MEs_global), MEs_global),
+                file = fn, sep = "\t", quote = FALSE, row.names = FALSE)
+  }
+
+  list(donor_mats_common = donor_mats,
+       MEs_by_tissue = MEs_by_tissue,
+       MEs_cross_tissue = MEs_global)
+}
 
 
 XWGCNA_Clusters_autoBeta <- function(
@@ -2502,7 +2709,9 @@ XWGCNA_Clusters_autoBeta <- function(
           verbose = 5,
           aggregate_by_donor_CT = aggregate_by_donor_CT,
           min_common_CT = ct_min_common,
-          ct_nBreaks = 12,
+          TSnBreaks = scaleFree_nBreaks,
+          ct_nBreaks = scaleFree_nBreaks,
+          ct_removeFirst = scaleFree_removeFirst,
           ct_fisher = ct_fisher,
           ct_fisher_scheme = ct_fisher_scheme,
           ct_fisher_Nref = ct_fisher_Nref,
@@ -2665,6 +2874,16 @@ XWGCNA_Clusters_autoBeta <- function(
     # )
     clusters_table <- as.data.frame(clusters_table, stringsAsFactors = FALSE)
     clusters_details <- as.data.frame(clusters_details, stringsAsFactors = FALSE)
+    res_MEs <- compute_all_module_eigengenes_common(
+      tissue_names = tissue_names,
+      tissue_expr_file_names = tissue_expr_file_names,
+      clusters_table = clusters_table,   
+      sd_quantile = sd_quantile,
+      max_genes_per_tissue = max_genes_per_tissue,
+      min_genes_for_ME = 1L,            
+      center_scale = TRUE,
+      export_prefix = paste0(out_prefix, "_ME_commonDonors")
+    )
 
     if (auto_beta) {
         return(list(
