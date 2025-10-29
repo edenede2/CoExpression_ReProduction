@@ -292,6 +292,25 @@ def build_pheno_matrix(
                     .agg(padj=("padj","min"))
                     .pivot(index="module", columns="phenotype", values="padj")
                     .reindex(index=mat.index, columns=mat.columns))
+
+    # If an explicit phenotype selection was provided, preserve that ordering
+    if include_phenotypes:
+        desired_cols: List = []
+        for raw_pattern in include_phenotypes:
+            try:
+                pattern = re.compile(raw_pattern, flags=re.IGNORECASE)
+            except re.error:
+                pattern = re.compile(re.escape(raw_pattern), flags=re.IGNORECASE)
+            matches = [col for col in mat.columns if pattern.search(str(col))]
+            for col in matches:
+                if col not in desired_cols:
+                    desired_cols.append(col)
+        if desired_cols:
+            remaining = [col for col in mat.columns if col not in desired_cols]
+            new_order = desired_cols + remaining
+            mat = mat.reindex(columns=new_order)
+            if padj_mat is not None:
+                padj_mat = padj_mat.reindex(columns=new_order)
     
     # Select top modules by minimum p-value if requested
     if top_modules is not None and len(mat) > top_modules and padj_mat is not None:
@@ -1007,18 +1026,74 @@ def run_all(
 
 
 if __name__ == "__main__":
+    # list_imports = [
+    #     "a_score_st4",
+    #     "adnc",
+    #     "amylsqrt_est_8reg",
+    #     "apoe_genotype",
+    #     "b_score",
+    #     "c_score",
+    #     "ceradsc",
+    #     "cogdx",
+    #     "cogn_ep",
+    #     "cogn_global",
+    #     "cogn_po",
+    #     "cogn_ps",
+    #     "cogn_se",
+    #     "cogn_wo",
+    #     "cts_estmmse30",
+    #     "cts_moca30",
+    #     "gpath",
+    #     "hip_scl_yn_mid",
+    #     "lewydx_st4",
+    #     "tangsqrt_est_8reg",
+    #     "tdp_st4",
+    #     "arteriol_scler",
+    #     "caa_4gp",
+    #     "ci_num2_gct",
+    #     "ci_num2_mct",
+    #     "cvda_4gp2",
+    #     "gaitsc",
+    #     "iadlsum",
+    #     "katzsum",
+    #     "motor10",
+    #     "motor_dexterity",
+    #     "motor_gait",
+    #     "motor_handstreng",
+    #     "cesdsum",
+    #     "late_life_cogact_freq",
+    #     "late_life_soc_act",
+    #     "phys5itemsum",
+    #     "soc_net",
+    #     "social_isolation",
+    #     "bmi",
+    #     "dbp_avg",
+    #     "diabetes_sr_rx",
+    #     "heart_cum",
+    #     "hypertension_cum",
+    #     "sbp_avg",
+    #     "stroke_cum",
+    # ]
+    list_imports = [
+        "adnc",
+        "tangsqrt_est_8reg",
+        "amylsqrt_est_8reg",
+        "cogn_global",
+        "tdp_st4",
+        "caa_4gp"
+    ]
     # Example: update paths to your local files or keep as uploaded ones
     outputs = run_all(
-    pheno_tsv="/Users/edeneldar/CoExpression_ReProduction/notebooks/rosmap_ME_pheno_ME_vs_pheno_correlations.tsv",
+    pheno_tsv="/Users/edeneldar/CoExpression_ReProduction/nbs_ME_vs_all_pheno_correlations.tsv",
     kegg_csv="/Volumes/Transcend/Eden/CoExpression_ReProduction/kegg_rosmap_constBeta_CT2_TS3.csv",
     details_tsv="/Volumes/Transcend/Eden/CoExpression_ReProduction/nbs/xwgcna_rosmap_constBeta_CT2_TS3_Cluster_details.tsv",
-    out_prefix="rosmap_constBeta_CT2_TS3",
+    out_prefix="rosmap_constBeta_CT2_TS3_full_phenos_sorted_30_top_phenos",
     tissues=['CROSS'],                 # e.g., ["AC","MFBA9BA46","PCGBA23"]
-    include_phenotypes=None,      # e.g., [r"cog|memory", r"age"]
+    include_phenotypes=list_imports,      # e.g., [r"cog|memory", r"age"]
     exclude_phenotypes=[r"msex"],      # e.g., [r"sex|gender"]
     metric="corr",                # Changed to "corr" for signed correlation values
     cap=1.0,                      # Changed to 1.0 for correlation range [-1, 1]
-    top_modules=20,             # e.g., 100 to select only top 100 modules by phenotype significance
+    top_modules=30,             # e.g., 100 to select only top 100 modules by phenotype significance
     top_k_phenos=10,
     top_k_pathways=5,
     figure_dpi=180,
