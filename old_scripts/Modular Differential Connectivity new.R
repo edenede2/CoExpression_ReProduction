@@ -26,6 +26,8 @@ files_young_shaked <- c(
   Muscle ="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Muscle - Skeletal_young.csv",
   Brain  ="/Users/edeneldar/CoExpression_ReProduction/old_outputs/Brain - Cortex_young.csv"
 )
+
+# rosmap_files <-
 clusters_table_path_shaked <- "/Users/edeneldar/CoExpression_ReProduction/xwgcna_young_original_run9_Clusters_table.txt"  # columns: Cluster ID,Tissue,Gene Symbol 
 clusters_table_path <- "xwgcna_young_auto_run1_Clusters_table.txt"  # columns: Cluster ID,Tissue,Gene Symbol
 # clu <- read.delim("xwgcna_young_auto_run1_Clusters_table.txt", check.names = FALSE)  
